@@ -2,18 +2,10 @@
   "name": "@senzops/apm-node",
   "version": "1.0.0",
   "description": "Universal APM SDK for Senzor",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "require": "./dist/index.js",
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
-    }
-  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsup",
+    "build": "tsup src/index.ts --format cjs,esm,iife --dts --clean --minify",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {},
