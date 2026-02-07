@@ -65,3 +65,33 @@ npm install
 npm run build
 This will produce a lightweight `dist/` folder ready for publishing to NPM.
 ```
+
+### **Using Wrappers**
+**1. Express (Standard)**
+```js
+app.use(Senzor.requestHandler());
+```
+
+**2. Next.js App Router (`app/api/route.ts`)**
+```javascript
+import { Senzor } from '@senzops/apm-node';
+
+export const GET = Senzor.wrapNextRoute(async (request) => {
+  return Response.json({ success: true });
+});
+```
+**3. Nuxt / Nitro (`server/api/test.ts`)**
+```javascript
+import { Senzor } from '@senzops/apm-node';
+
+export default Senzor.wrapH3(defineEventHandler((event) => {
+  return { hello: 'world' }
+}));
+```
+**4. Fastify**
+```javascript
+import { Senzor } from '@senzops/apm-node';
+
+fastify.register(Senzor.fastifyPlugin, { apiKey: '...' });
+```
+This approach provides **native robustness** for each framework. It captures errors (500s), 404s (Route not found), and correct timing without the user manually writing `track()` calls.
