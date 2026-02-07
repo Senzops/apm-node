@@ -24,5 +24,16 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "apm",
+    "monitoring",
+    "senzor",
+    "node",
+    "javascript",
+    "api",
+    "observability"
+  ],
+  "author": "Senzops",
+  "license": "MIT"
 }
