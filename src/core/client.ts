@@ -18,6 +18,7 @@ export class SenzorClient {
     }
     this.options = options;
     const endpoint = options.endpoint || 'https://api.senzor.dev/api/ingest/apm';
+    const debug = options.debug || false;
 
     this.transport = new Transport({
       ...options,
@@ -25,17 +26,17 @@ export class SenzorClient {
     });
 
     if (!this.isInstrumented) {
-      try { instrumentHttp(endpoint); } catch (e) { }
-      try { instrumentMongo(); } catch (e) { }
+      try { instrumentHttp(endpoint, debug); } catch (e) { }
+      try { instrumentMongo(debug); } catch (e) { }
       try { instrumentPg(); } catch (e) { }
 
       this.isInstrumented = true;
-      if (options.debug) console.log('[Senzor] Auto-instrumentation enabled');
+      if (debug) console.log('[Senzor] Auto-instrumentation enabled');
     }
-
-    if (options.debug) console.log('[Senzor] Initialized');
   }
 
+  // ... (startTrace, endTrace, track, startSpan, flush remain same) ...
+  // Ensuring startTrace returns T
   public startTrace<T>(data: Partial<ActiveTrace['data']>, next: () => T): T {
     if (!this.transport) return next();
 
@@ -45,7 +46,6 @@ export class SenzorClient {
       data: data,
       spans: []
     };
-
     return Context.run(trace, next);
   }
 
@@ -65,9 +65,12 @@ export class SenzorClient {
       timestamp: new Date().toISOString()
     };
 
+    if (this.options?.debug) console.log(`[Senzor] Ended Trace ${trace.id} with ${trace.spans.length} spans`);
+
     this.transport.add(payload);
   }
 
+  // ... (manual track methods) ...
   public track(data: {
     method: string;
     route: string;
