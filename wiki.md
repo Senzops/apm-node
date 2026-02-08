@@ -95,3 +95,26 @@ import { Senzor } from '@senzops/apm-node';
 fastify.register(Senzor.fastifyPlugin, { apiKey: '...' });
 ```
 This approach provides **native robustness** for each framework. It captures errors (500s), 404s (Route not found), and correct timing without the user manually writing `track()` calls.
+
+## How Users Add Spans (Waterfall)
+Now your users can do this in their Express/Next.js apps:
+
+```js
+app.get('/users', async (req, res) => {
+  // 1. Start a span
+  const dbSpan = Senzor.startSpan('fetch_users_db', 'db');
+  
+  const users = await db.query('SELECT * FROM users');
+  
+  // 2. End span (Duration calculated automatically)
+  dbSpan.end({ query: 'SELECT * FROM users' });
+
+  // 3. Start another span
+  const apiSpan = Senzor.startSpan('stripe_api', 'http');
+  await axios.get('...');
+  apiSpan.end({}, 200);
+
+  res.json(users);
+});
+```
+This will automatically appear in your **Waterfall Chart** on the dashboard, nested under the main request Trace.

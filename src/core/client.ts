@@ -1,43 +1,73 @@
 import { Transport } from './transport';
-
-export interface SenzorOptions {
-  apiKey: string;
-  endpoint?: string;
-  batchSize?: number;
-  flushInterval?: number;
-  debug?: boolean;
-}
+import { Context } from './context';
+import { SenzorOptions, ActiveTrace } from './types';
+import { randomUUID } from 'crypto';
+import { instrumentHttp } from '../instrumentation/http';
+import { instrumentMongo } from '../instrumentation/mongo';
+import { instrumentPg } from '../instrumentation/pg';
 
 export class SenzorClient {
   private transport: Transport | null = null;
   private options: SenzorOptions | null = null;
+  private isInstrumented = false;
 
   public init(options: SenzorOptions) {
     if (!options.apiKey) {
       console.warn('[Senzor] API Key missing. SDK disabled.');
       return;
     }
-
-    this.options = {
-      endpoint: 'https://api.senzor.dev/api/ingest/apm',
-      batchSize: 100,
-      flushInterval: 10000,
-      debug: false,
-      ...options
-    };
+    this.options = options;
+    const endpoint = options.endpoint || 'https://api.senzor.dev/api/ingest/apm';
 
     this.transport = new Transport({
-      apiKey: this.options.apiKey,
-      endpoint: this.options.endpoint!,
-      batchSize: this.options.batchSize!,
-      flushInterval: this.options.flushInterval!,
-      debug: this.options.debug || false
+      ...options,
+      endpoint
     });
 
-    if (this.options.debug) console.log('[Senzor] Initialized');
+    if (!this.isInstrumented) {
+      try { instrumentHttp(endpoint); } catch (e) { }
+      try { instrumentMongo(); } catch (e) { }
+      try { instrumentPg(); } catch (e) { }
+
+      this.isInstrumented = true;
+      if (options.debug) console.log('[Senzor] Auto-instrumentation enabled');
+    }
+
+    if (options.debug) console.log('[Senzor] Initialized');
   }
 
-  // --- Manual Tracking (For any framework) ---
+  public startTrace<T>(data: Partial<ActiveTrace['data']>, next: () => T): T {
+    if (!this.transport) return next();
+
+    const trace: ActiveTrace = {
+      id: randomUUID(),
+      startTime: performance.now(),
+      data: data,
+      spans: []
+    };
+
+    return Context.run(trace, next);
+  }
+
+  public endTrace(status: number, extraData: any = {}) {
+    const trace = Context.current();
+    if (!trace || !this.transport) return;
+
+    const duration = performance.now() - trace.startTime;
+
+    const payload = {
+      traceId: trace.id,
+      ...trace.data,
+      ...extraData,
+      status,
+      duration,
+      spans: trace.spans,
+      timestamp: new Date().toISOString()
+    };
+
+    this.transport.add(payload);
+  }
+
   public track(data: {
     method: string;
     route: string;
@@ -48,14 +78,37 @@ export class SenzorClient {
     userAgent?: string;
   }) {
     if (!this.transport) return;
-
-    this.transport.add({
+    const payload = {
+      traceId: randomUUID(),
       ...data,
+      spans: [],
       timestamp: new Date().toISOString()
-    });
+    };
+    this.transport.add(payload);
   }
 
-  // --- Force Flush (For Serverless/Lambda) ---
+  public startSpan(name: string, type: 'db' | 'http' | 'function' | 'custom' = 'custom') {
+    const trace = Context.current();
+    if (!trace) return { end: () => { } };
+
+    const startTime = performance.now() - trace.startTime;
+    const spanStartAbs = performance.now();
+
+    return {
+      end: (meta?: any, status?: number) => {
+        const duration = performance.now() - spanStartAbs;
+        Context.addSpan({
+          name,
+          type,
+          startTime,
+          duration,
+          status,
+          meta
+        });
+      }
+    };
+  }
+
   public async flush() {
     if (this.transport) await this.transport.flush();
   }

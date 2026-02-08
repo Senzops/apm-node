@@ -1,31 +1,21 @@
-export interface TransportConfig {
-  apiKey: string;
-  endpoint: string;
-  batchSize: number;
-  flushInterval: number;
-  debug: boolean;
-}
+import { SenzorOptions } from './types';
 
 export class Transport {
   private queue: any[] = [];
-  private config: TransportConfig;
-  private timer: any = null;
+  private timer: NodeJS.Timeout | null = null;
 
-  constructor(config: TransportConfig) {
-    this.config = config;
-    // Only start timer in non-serverless environments (long running processes)
+  constructor(private config: SenzorOptions) {
     if (typeof setInterval !== 'undefined') {
-      this.timer = setInterval(() => this.flush(), this.config.flushInterval);
-      // Unref if in Node.js to allow process exit
+      this.timer = setInterval(() => this.flush(), config.flushInterval || 10000);
       if (this.timer && typeof this.timer.unref === 'function') {
-        this.timer.unref();
+        this.timer.unref(); // Don't block process exit
       }
     }
   }
 
-  public add(event: any) {
-    this.queue.push(event);
-    if (this.queue.length >= this.config.batchSize) {
+  public add(trace: any) {
+    this.queue.push(trace);
+    if (this.queue.length >= (this.config.batchSize || 100)) {
       this.flush();
     }
   }
@@ -37,22 +27,21 @@ export class Transport {
     this.queue = [];
 
     try {
-      // Use native fetch (Node 18+, Edge, Browser)
-      await fetch(this.config.endpoint, {
+      // Use global fetch (Node 18+)
+      await fetch(this.config.endpoint || 'https://api.senzor.dev/api/ingest/apm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-service-api-key': this.config.apiKey,
         },
         body: JSON.stringify(batch),
-        // keepalive ensures connection stays open even if function ends (vital for APM)
         keepalive: true,
       });
-
+      
       if (this.config.debug) console.log(`[Senzor] Flushed ${batch.length} traces`);
     } catch (err) {
       if (this.config.debug) console.error('[Senzor] Ingestion Error:', err);
-      // We drop data on failure to prevent memory leaks in the app
+      // Dropping data to prevent memory leaks is preferred in APM
     }
   }
 }

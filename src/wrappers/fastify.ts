@@ -1,5 +1,5 @@
 import { client } from '../core/client';
-import { SenzorOptions } from '../core/client';
+import { SenzorOptions } from '../core/types';
 
 // We don't import Fastify types to keep zero-deps, but structure matches
 export const senzorPlugin = (fastify: any, options: SenzorOptions, done: Function) => {
