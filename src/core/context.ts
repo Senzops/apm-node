@@ -1,26 +1,26 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { ActiveTrace } from './types';
 
-// Storage to hold the current Trace for any async operation
 export const storage = new AsyncLocalStorage<ActiveTrace>();
 
 export const Context = {
-  // Run a function within a trace context
-  // Updated to be Generic <T> to allow returning values (Promises, etc)
   run: <T>(trace: ActiveTrace, fn: () => T): T => {
     return storage.run(trace, fn);
   },
 
-  // Get current trace (safe)
   current: (): ActiveTrace | undefined => {
     return storage.getStore();
   },
 
-  // Add a span to the current trace
   addSpan: (span: any) => {
     const store = storage.getStore();
     if (store) {
       store.spans.push(span);
+    } else {
+      // If we are here, something tried to add a span but lost context
+      // This is common if users await inside a callback that wasn't bound
+      // However, usually silent failure is preferred in production APM
+      console.warn('[Senzor] Lost context for span:', span.name);
     }
   }
 };

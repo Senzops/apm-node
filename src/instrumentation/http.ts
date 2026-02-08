@@ -3,7 +3,6 @@ import https from 'https';
 import { URL } from 'url';
 import { Context } from '../core/context';
 
-// Helper to safely wrap modules
 const shimmer = (module: any, methodName: string, wrapper: (original: Function) => Function) => {
   if (!module[methodName]) return;
   const original = module[methodName];
@@ -11,53 +10,67 @@ const shimmer = (module: any, methodName: string, wrapper: (original: Function) 
 };
 
 export const instrumentHttp = (ingestUrl: string) => {
-  const ingestHost = new URL(ingestUrl).hostname;
+  let ingestHost = '';
+  try {
+    ingestHost = new URL(ingestUrl).hostname;
+  } catch (e) {
+    // Fallback if invalid URL provided, though init checks this
+    ingestHost = 'api.senzor.dev';
+  }
 
   const requestWrapper = (original: Function) => {
     return function (this: any, ...args: any[]) {
-      // 1. Parse Arguments to get URL
+      // 1. Robust Argument Parsing
+      // http.request(url, [options], [callback])
+      // http.request(options, [callback])
       let options: any = {};
       let urlStr = '';
 
+      // Check if first arg is URL-like
       if (typeof args[0] === 'string' || args[0] instanceof URL) {
         urlStr = args[0].toString();
-        options = args[1] || {};
+        // If second arg is object, it's options. If function, it's callback.
+        if (typeof args[1] === 'object' && args[1] !== null) {
+          options = args[1];
+        }
       } else {
         options = args[0] || {};
-        const protocol = options.protocol || 'http:';
+        const protocol = options.protocol || (options.port === 443 ? 'https:' : 'http:');
         const host = options.hostname || options.host || 'localhost';
         const path = options.path || '/';
         urlStr = `${protocol}//${host}${path}`;
       }
 
-      // 2. SAFETY GUARD: Ignore calls to Senzor Ingest API (Prevent Infinite Loop)
+      // 2. Prevent Infinite Loops (Ignore calls to Senzor)
       if (urlStr.includes(ingestHost) || (options.hostname && options.hostname.includes(ingestHost))) {
         return original.apply(this, args);
       }
 
-      // 3. Check if we are inside an Active Trace
-      // If we are not handling a user request, don't trace background http calls
+      // 3. Check Context
       const trace = Context.current();
       if (!trace) {
+        // Debug mode would help here, but we can't access config easily.
+        // If no trace context, we simply execute original.
         return original.apply(this, args);
       }
 
       // 4. Start Span
       const method = (options.method || 'GET').toUpperCase();
-      const startTime = performance.now() - trace.startTime; // Relative to trace start
+      const startTime = performance.now() - trace.startTime;
       const spanStartAbs = performance.now();
+      const hostname = new URL(urlStr).hostname;
 
-      // 5. Execute Request
+      // 5. Execute Original
       const req = original.apply(this, args);
 
-      // 6. Hook into Response/Error
+      // 6. Capture Response
       req.on('response', (res: any) => {
-        // Wait for end of stream to calculate full duration (TTFB + Download)
-        res.on('end', () => {
+        // We use 'once' to ensure we only record it once
+        const onFinish = () => {
           const duration = performance.now() - spanStartAbs;
-          
+
           Context.addSpan({
-            name: `${method} ${new URL(urlStr).hostname}`, // e.g. "GET api.stripe.com"
+            name: `${method} ${hostname}`,
             type: 'http',
             startTime,
             duration,
@@ -67,18 +80,25 @@ export const instrumentHttp = (ingestUrl: string) => {
               method: method,
             }
           });
-        });
+        };
+
+        // 'end' fires when data is consumed
+        res.once('end', onFinish);
+        // 'close' fires if connection closed early
+        res.once('close', onFinish);
+        // 'error' on response stream
+        res.once('error', onFinish);
       });
 
       req.on('error', (err: Error) => {
         const duration = performance.now() - spanStartAbs;
         Context.addSpan({
-          name: `${method} ${urlStr}`,
+          name: `${method} ${hostname}`,
           type: 'http',
           startTime,
           duration,
-          status: 500, // Client Error
-          meta: { error: err.message }
+          status: 500,
+          meta: { error: err.message, url: urlStr }
         });
       });
 
@@ -86,7 +106,7 @@ export const instrumentHttp = (ingestUrl: string) => {
     };
   };
 
-  // Apply patches
+  // Patch HTTP and HTTPS
   shimmer(http, 'request', requestWrapper);
   shimmer(http, 'get', requestWrapper);
   shimmer(https, 'request', requestWrapper);
