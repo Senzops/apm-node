@@ -9,15 +9,79 @@ const shimmer = (module: any, methodName: string, wrapper: (original: Function) 
   module[methodName] = wrapper(original);
 };
 
+// --- Native Fetch Instrumentation (Node 18+) ---
+export const instrumentFetch = (ingestUrl: string, debug = false) => {
+  if (!globalThis.fetch) return;
+
+  let ingestHost = '';
+  try { ingestHost = new URL(ingestUrl).hostname; } catch (e) { }
+
+  const originalFetch = globalThis.fetch;
+
+  // @ts-ignore
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    // 1. Extract URL
+    let urlStr = '';
+    if (typeof input === 'string') urlStr = input;
+    else if (input instanceof URL) urlStr = input.toString();
+    else if (input && input.url) urlStr = input.url; // Request object
+
+    // 2. Infinite Loop Guard
+    if (ingestHost && urlStr.includes(ingestHost)) {
+      return originalFetch(input, init);
+    }
+
+    // 3. Context Check
+    const trace = Context.current();
+    if (!trace) {
+      return originalFetch(input, init);
+    }
+
+    // 4. Start Span
+    const method = (init?.method || 'GET').toUpperCase();
+    const startTime = performance.now() - trace.startTime;
+    const spanStartAbs = performance.now();
+    let hostname = 'unknown';
+    try { hostname = new URL(urlStr).hostname; } catch (e) { }
+
+    if (debug) console.log(`[Senzor] Tracking Fetch: ${method} ${hostname}`);
+
+    try {
+      const response = await originalFetch(input, init);
+
+      // 5. End Span
+      const duration = performance.now() - spanStartAbs;
+      Context.addSpan({
+        name: `${method} ${hostname}`,
+        type: 'http',
+        startTime,
+        duration,
+        status: response.status,
+        meta: { url: urlStr, method, library: 'fetch' }
+      });
+
+      return response;
+    } catch (err: any) {
+      const duration = performance.now() - spanStartAbs;
+      Context.addSpan({
+        name: `${method} ${hostname}`,
+        type: 'http',
+        startTime,
+        duration,
+        status: 500,
+        meta: { error: err.message, url: urlStr, library: 'fetch' }
+      });
+      throw err;
+    }
+  };
+};
+
+// --- Standard HTTP/HTTPS Instrumentation ---
 export const instrumentHttp = (ingestUrl: string, debug = false) => {
   let ingestHost = '';
   try {
     ingestHost = new URL(ingestUrl).hostname;
-    if (debug) console.log(`[Senzor] HTTP Instrumentation ignoring host: ${ingestHost}`);
-  } catch (e) {
-    // If invalid URL passed, we can't filter loop safely, so we might skip instrumentation
-    if (debug) console.error('[Senzor] Invalid Ingest URL for HTTP instrumentation');
-  }
+  } catch (e) { }
 
   const requestWrapper = (original: Function) => {
     return function (this: any, ...args: any[]) {
@@ -35,24 +99,18 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
         urlStr = `${protocol}//${host}${path}`;
       }
 
-      // Safety Guard: Ignore calls to Senzor Ingest API
       if (ingestHost && (urlStr.includes(ingestHost) || (options.hostname && options.hostname.includes(ingestHost)))) {
         return original.apply(this, args);
       }
 
       const trace = Context.current();
-      if (!trace) {
-        // Not inside a tracked request
-        return original.apply(this, args);
-      }
+      if (!trace) return original.apply(this, args);
 
       const method = (options.method || 'GET').toUpperCase();
       const startTime = performance.now() - trace.startTime;
       const spanStartAbs = performance.now();
       let hostname = 'unknown';
       try { hostname = new URL(urlStr).hostname; } catch (e) { hostname = options.hostname || 'unknown'; }
-
-      if (debug) console.log(`[Senzor] Tracking HTTP: ${method} ${hostname}`);
 
       const req = original.apply(this, args);
 
@@ -64,21 +122,16 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
           startTime,
           duration,
           status: error ? 500 : res?.statusCode || 0,
-          meta: { url: urlStr, method }
+          meta: { url: urlStr, method, library: 'http' }
         });
       };
 
       req.on('response', (res: any) => {
-        // We capture on 'response' (headers received) to be safe.
-        // Waiting for 'end' might miss requests where body isn't consumed.
         res.once('end', () => captureSpan(res));
-        // Fallback if 'end' doesn't fire fast enough
-        // setTimeout(() => captureSpan(res), 5000); 
+        res.once('error', (err: Error) => captureSpan(res, err));
       });
 
-      req.on('error', (err: Error) => {
-        captureSpan(null, err);
-      });
+      req.on('error', (err: Error) => captureSpan(null, err));
 
       return req;
     };
