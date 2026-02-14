@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import { ActiveTrace } from './types';
+import { ActiveTrace, TraceError } from './types';
 
 export const storage = new AsyncLocalStorage<ActiveTrace>();
 
@@ -16,11 +16,18 @@ export const Context = {
     const store = storage.getStore();
     if (store) {
       store.spans.push(span);
-    } else {
-      // If we are here, something tried to add a span but lost context
-      // This is common if users await inside a callback that wasn't bound
-      // However, usually silent failure is preferred in production APM
-      console.warn('[Senzor] Lost context for span:', span.name);
+    }
+  },
+
+  // Attach error to current trace
+  setError: (error: Error) => {
+    const store = storage.getStore();
+    if (store) {
+      store.error = {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      };
     }
   }
 };

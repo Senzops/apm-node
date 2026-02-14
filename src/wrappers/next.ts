@@ -1,16 +1,14 @@
 import { client } from '../core/client';
 import { normalizePath } from '../core/normalizer';
 
-// --- App Router Wrapper (Route Handlers) ---
+// --- App Router Wrapper ---
 export const wrapNextRoute = (handler: Function) => {
   return async (req: Request | any, context?: any) => {
-    // 1. Extract Info
     const url = req.url ? new URL(req.url) : { pathname: '/' };
     const method = req.method || 'GET';
     const ua = req.headers.get ? req.headers.get('user-agent') : undefined;
     const ip = req.headers.get ? req.headers.get('x-forwarded-for') : undefined;
 
-    // 2. Run in Context
     return client.startTrace({
       method,
       path: url.pathname,
@@ -20,44 +18,44 @@ export const wrapNextRoute = (handler: Function) => {
       try {
         const response = await handler(req, context);
         const status = response?.status || 200;
-        
         client.endTrace(status, { route: normalizePath(url.pathname) });
         return response;
       } catch (err: any) {
+        // AUTOMATIC ERROR CAPTURE
+        client.captureError(err);
         client.endTrace(500, { route: normalizePath(url.pathname) });
-        throw err;
+        throw err; // Re-throw so Next.js handles the error page
       }
     });
   };
 };
 
-// --- Pages Router Wrapper (API Routes) ---
+// --- Pages Router Wrapper ---
 export const wrapNextPages = (handler: Function) => {
   return async (req: any, res: any) => {
     const path = req.url ? req.url.split('?')[0] : '/';
-    
-    // 1. Run in Context
+
     return client.startTrace({
       method: req.method || 'GET',
       path: path,
       userAgent: req.headers['user-agent'],
       ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
     }, async () => {
-      
-      // 2. Hook Response
+
       const done = () => {
         client.endTrace(res.statusCode || 200, { route: normalizePath(path) });
       };
-      
-      res.once('finish', done);
-      res.once('close', done); // Fallback if finish doesn't fire
 
-      // 3. Execute
+      res.once('finish', done);
+      res.once('close', done);
+
       try {
         return await handler(req, res);
-      } catch (e) {
-        // Next.js Pages router usually handles errors internally, 
-        // but we ensure we catch sync errors here
+      } catch (e: any) {
+        // AUTOMATIC ERROR CAPTURE
+        client.captureError(e);
+        // Note: In Pages dir, we rely on 'finish' listener above to close trace, 
+        // but capturing here ensures the error data is attached.
         throw e;
       }
     });

@@ -2,7 +2,7 @@ import { Transport } from './transport';
 import { Context } from './context';
 import { SenzorOptions, ActiveTrace } from './types';
 import { randomUUID } from 'crypto';
-import { instrumentHttp, instrumentFetch } from '../instrumentation/http'; // Import both
+import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
 import { instrumentMongo } from '../instrumentation/mongo';
 import { instrumentPg } from '../instrumentation/pg';
 
@@ -20,38 +20,60 @@ export class SenzorClient {
     const endpoint = options.endpoint || 'https://api.senzor.dev/api/ingest/apm';
     const debug = options.debug || false;
 
-    this.transport = new Transport({
-      ...options,
-      endpoint
-    });
+    this.transport = new Transport({ ...options, endpoint });
 
-    // --- ENABLE AUTO INSTRUMENTATION ---
     if (!this.isInstrumented) {
       try { instrumentHttp(endpoint, debug); } catch (e) { }
-      try { instrumentFetch(endpoint, debug); } catch (e) { } // NEW: Fetch Support
+      try { instrumentFetch(endpoint, debug); } catch (e) { }
       try { instrumentMongo(debug); } catch (e) { }
       try { instrumentPg(); } catch (e) { }
 
       this.isInstrumented = true;
-      if (debug) console.log('[Senzor] Auto-instrumentation enabled (HTTP, Fetch, Mongo)');
+      if (debug) console.log('[Senzor] Auto-instrumentation enabled');
     }
   }
 
-  // ... (Rest of file same as before: startTrace, endTrace, track, etc.) ...
   public startTrace<T>(data: Partial<ActiveTrace['data']>, next: () => T): T {
     if (!this.transport) return next();
-    const trace: ActiveTrace = { id: randomUUID(), startTime: performance.now(), data: data, spans: [] };
+    const trace: ActiveTrace = {
+      id: randomUUID(),
+      startTime: performance.now(),
+      data: data,
+      spans: []
+    };
     return Context.run(trace, next);
   }
 
   public endTrace(status: number, extraData: any = {}) {
     const trace = Context.current();
     if (!trace || !this.transport) return;
+
     const duration = performance.now() - trace.startTime;
-    const payload = { traceId: trace.id, ...trace.data, ...extraData, status, duration, spans: trace.spans, timestamp: new Date().toISOString() };
+
+    const payload = {
+      traceId: trace.id,
+      ...trace.data,
+      ...extraData,
+      status,
+      duration,
+      spans: trace.spans,
+      error: trace.error, // Include Error if captured
+      timestamp: new Date().toISOString()
+    };
+
     this.transport.add(payload);
   }
 
+  // --- NEW: Capture Exception ---
+  public captureError(error: unknown) {
+    if (error instanceof Error) {
+      Context.setError(error);
+    } else if (typeof error === 'string') {
+      Context.setError(new Error(error));
+    }
+  }
+
+  // ... (manual track, startSpan, flush remain same) ...
   public track(data: any) { this.transport?.add({ traceId: randomUUID(), ...data, spans: [], timestamp: new Date().toISOString() }); }
 
   public startSpan(name: string, type: 'db' | 'http' | 'function' | 'custom' = 'custom') {
