@@ -122,7 +122,7 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
           startTime,
           duration,
           status: error ? 500 : res?.statusCode || 0,
-          meta: { url: urlStr, method, library: 'http' }
+          meta: { url: urlStr, method, library: 'http', error: error ? error.message : undefined }
         });
       };
 
