@@ -8,6 +8,7 @@ export const expressMiddleware = () => {
       path: req.originalUrl || req.url,
       ip: req.ip || req.socket?.remoteAddress,
       userAgent: req.headers['user-agent'],
+      headers: req.headers
     }, () => {
 
       // Auto-detect status code on finish

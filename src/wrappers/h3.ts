@@ -13,6 +13,7 @@ export const wrapH3 = (handler: EventHandler) => {
       path: path,
       ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
       userAgent: req.headers['user-agent'],
+      headers: req.headers // Pass headers
     }, async () => {
       try {
         const response = await handler(event);
@@ -23,9 +24,7 @@ export const wrapH3 = (handler: EventHandler) => {
         client.endTrace(status, { route: getRoute(event, path) });
         return response;
       } catch (err: any) {
-        // AUTOMATIC ERROR CAPTURE
         client.captureError(err);
-
         const status = err.statusCode || err.status || 500;
         client.endTrace(status, { route: getRoute(event, path) });
         throw err;

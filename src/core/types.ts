@@ -7,6 +7,7 @@ export interface SenzorOptions {
 }
 
 export interface Span {
+  spanId: string; // NEW: Unique ID for this span
   name: string;
   type: 'db' | 'http' | 'function' | 'custom';
   startTime: number;
@@ -23,6 +24,11 @@ export interface TraceError {
 
 export interface Trace {
   traceId: string;
+
+  // Distributed Tracing Fields
+  parentTraceId?: string; // NEW
+  parentSpanId?: string;  // NEW
+
   method: string;
   route: string;
   path: string;

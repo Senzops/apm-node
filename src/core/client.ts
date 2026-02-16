@@ -33,34 +33,49 @@ export class SenzorClient {
     }
   }
 
-  public startTrace<T>(data: Partial<ActiveTrace['data']>, next: () => T): T {
+  public startTrace<T>(data: Partial<ActiveTrace['data']> & { headers?: any }, next: () => T): T {
     if (!this.transport) return next();
+
+    // Check for Distributed Tracing Headers
+    let parentTraceId = undefined;
+    let parentSpanId = undefined;
+
+    if (data.headers) {
+      // Handle various casing
+      parentTraceId = data.headers['x-senzor-trace-id'] || data.headers['X-SENZOR-TRACE-ID'];
+      parentSpanId = data.headers['x-senzor-parent-span-id'] || data.headers['X-SENZOR-PARENT-SPAN-ID'];
+    }
+
     const trace: ActiveTrace = {
       id: randomUUID(),
       startTime: performance.now(),
-      data: data,
+      data: {
+        ...data,
+        parentTraceId, // Link to parent
+        parentSpanId   // Link to specific call
+      },
       spans: []
     };
+
     return Context.run(trace, next);
   }
 
   public endTrace(status: number, extraData: any = {}) {
     const trace = Context.current();
     if (!trace || !this.transport) return;
-
     const duration = performance.now() - trace.startTime;
 
+    // Explicitly destructure to ensure parent IDs are included
     const payload = {
       traceId: trace.id,
+      parentTraceId: trace.data.parentTraceId,
+      parentSpanId: trace.data.parentSpanId,
       ...trace.data,
       ...extraData,
-      status,
-      duration,
-      spans: trace.spans,
-      error: trace.error, // Include Error if captured
-      timestamp: new Date().toISOString()
-    };
+      status, duration, spans: trace.spans, timestamp: new Date().toISOString(),
+      error: trace.error,
 
+    };
     this.transport.add(payload);
   }
 
@@ -81,7 +96,14 @@ export class SenzorClient {
     if (!trace) return { end: () => { } };
     const startTime = performance.now() - trace.startTime;
     const spanStartAbs = performance.now();
-    return { end: (meta?: any, status?: number) => { Context.addSpan({ name, type, startTime, duration: performance.now() - spanStartAbs, status, meta }); } };
+    const spanId = randomUUID(); // Manual spans also need IDs
+
+    return {
+      end: (meta?: any, status?: number) => {
+        const duration = performance.now() - spanStartAbs;
+        Context.addSpan({ spanId, name, type, startTime, duration, status, meta });
+      }
+    };
   }
 
   public async flush() { if (this.transport) await this.transport.flush(); }

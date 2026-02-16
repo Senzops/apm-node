@@ -2,6 +2,7 @@ import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 import { Context } from '../core/context';
+import { randomUUID } from 'crypto';
 
 const shimmer = (module: any, methodName: string, wrapper: (original: Function) => Function) => {
   if (!module[methodName]) return;
@@ -9,7 +10,7 @@ const shimmer = (module: any, methodName: string, wrapper: (original: Function) 
   module[methodName] = wrapper(original);
 };
 
-// --- Native Fetch Instrumentation (Node 18+) ---
+// --- FETCH INSTRUMENTATION (Node 18+ / Edge) ---
 export const instrumentFetch = (ingestUrl: string, debug = false) => {
   if (!globalThis.fetch) return;
 
@@ -24,7 +25,7 @@ export const instrumentFetch = (ingestUrl: string, debug = false) => {
     let urlStr = '';
     if (typeof input === 'string') urlStr = input;
     else if (input instanceof URL) urlStr = input.toString();
-    else if (input && input.url) urlStr = input.url; // Request object
+    else if (input && (input as any).url) urlStr = (input as any).url;
 
     // 2. Infinite Loop Guard
     if (ingestHost && urlStr.includes(ingestHost)) {
@@ -37,21 +38,45 @@ export const instrumentFetch = (ingestUrl: string, debug = false) => {
       return originalFetch(input, init);
     }
 
-    // 4. Start Span
+    // 4. Prepare Metadata & ID
     const method = (init?.method || 'GET').toUpperCase();
     const startTime = performance.now() - trace.startTime;
     const spanStartAbs = performance.now();
+    const spanId = randomUUID(); // New ID for this specific outbound call
+
     let hostname = 'unknown';
     try { hostname = new URL(urlStr).hostname; } catch (e) { }
 
-    if (debug) console.log(`[Senzor] Tracking Fetch: ${method} ${hostname}`);
+    if (debug) console.log(`[Senzor] Fetch: ${method} ${hostname}`);
+
+    // 5. Inject Distributed Tracing Headers
+    // We need to clone init or create it to avoid mutating original ref unexpectedly
+    const newInit = { ...init };
+    if (!newInit.headers) {
+      newInit.headers = {};
+    }
+
+    // Handle different Header formats (Headers object vs plain object)
+    if (newInit.headers instanceof Headers) {
+      newInit.headers.set('x-senzor-trace-id', trace.id);
+      newInit.headers.set('x-senzor-parent-span-id', spanId);
+    } else if (Array.isArray(newInit.headers)) {
+      newInit.headers.push(['x-senzor-trace-id', trace.id]);
+      newInit.headers.push(['x-senzor-parent-span-id', spanId]);
+    } else {
+      // Plain object
+      (newInit.headers as any)['x-senzor-trace-id'] = trace.id;
+      (newInit.headers as any)['x-senzor-parent-span-id'] = spanId;
+    }
 
     try {
-      const response = await originalFetch(input, init);
+      // 6. Execute Fetch
+      const response = await originalFetch(input, newInit);
 
-      // 5. End Span
+      // 7. Record Span
       const duration = performance.now() - spanStartAbs;
       Context.addSpan({
+        spanId,
         name: `${method} ${hostname}`,
         type: 'http',
         startTime,
@@ -64,6 +89,7 @@ export const instrumentFetch = (ingestUrl: string, debug = false) => {
     } catch (err: any) {
       const duration = performance.now() - spanStartAbs;
       Context.addSpan({
+        spanId,
         name: `${method} ${hostname}`,
         type: 'http',
         startTime,
@@ -76,12 +102,10 @@ export const instrumentFetch = (ingestUrl: string, debug = false) => {
   };
 };
 
-// --- Standard HTTP/HTTPS Instrumentation ---
+// --- HTTP/HTTPS INSTRUMENTATION ---
 export const instrumentHttp = (ingestUrl: string, debug = false) => {
   let ingestHost = '';
-  try {
-    ingestHost = new URL(ingestUrl).hostname;
-  } catch (e) { }
+  try { ingestHost = new URL(ingestUrl).hostname; } catch (e) { }
 
   const requestWrapper = (original: Function) => {
     return function (this: any, ...args: any[]) {
@@ -109,25 +133,34 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
       const method = (options.method || 'GET').toUpperCase();
       const startTime = performance.now() - trace.startTime;
       const spanStartAbs = performance.now();
+      const spanId = randomUUID(); // Generate ID
+
       let hostname = 'unknown';
       try { hostname = new URL(urlStr).hostname; } catch (e) { hostname = options.hostname || 'unknown'; }
+
+      // Inject Headers
+      if (!options.headers) options.headers = {};
+      options.headers['x-senzor-trace-id'] = trace.id;
+      options.headers['x-senzor-parent-span-id'] = spanId;
 
       const req = original.apply(this, args);
 
       const captureSpan = (res: any, error?: Error) => {
         const duration = performance.now() - spanStartAbs;
         Context.addSpan({
+          spanId,
           name: `${method} ${hostname}`,
           type: 'http',
           startTime,
           duration,
           status: error ? 500 : res?.statusCode || 0,
-          meta: { url: urlStr, method, library: 'http', error: error ? error.message : undefined }
+          meta: { url: urlStr, method, library: 'http' }
         });
       };
 
       req.on('response', (res: any) => {
         res.once('end', () => captureSpan(res));
+        res.once('close', () => captureSpan(res)); // Safety if stream not consumed
         res.once('error', (err: Error) => captureSpan(res, err));
       });
 
