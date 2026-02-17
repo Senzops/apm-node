@@ -41,17 +41,19 @@ export class SenzorClient {
     let parentSpanId = undefined;
 
     if (data.headers) {
-      // Robust header checking (Node headers are usually lowercase, but handle mixed)
+      // Robust header checking (handles Node's lowercase headers and other variants)
       const getHeader = (key: string) => {
-        // Direct access
         if (data.headers[key]) return data.headers[key];
         if (data.headers[key.toLowerCase()]) return data.headers[key.toLowerCase()];
-        if (data.headers[key.toUpperCase()]) return data.headers[key.toUpperCase()];
         return undefined;
       };
 
       parentTraceId = getHeader('x-senzor-trace-id');
       parentSpanId = getHeader('x-senzor-parent-span-id');
+
+      // If found, ensure they are strings (headers can be arrays)
+      if (Array.isArray(parentTraceId)) parentTraceId = parentTraceId[0];
+      if (Array.isArray(parentSpanId)) parentSpanId = parentSpanId[0];
     }
 
     const trace: ActiveTrace = {
