@@ -7,7 +7,7 @@ export interface SenzorOptions {
 }
 
 export interface Span {
-  spanId: string; // NEW: Unique ID for this span
+  spanId: string;
   name: string;
   type: 'db' | 'http' | 'function' | 'custom';
   startTime: number;
@@ -16,19 +16,20 @@ export interface Span {
   meta?: Record<string, any>;
 }
 
-export interface TraceError {
-  name: string;
+// NEW: Standalone Error Event
+export interface SenzorError {
+  errorClass: string;
   message: string;
-  stack?: string;
+  stackTrace?: string;
+  traceId?: string;
+  context?: any;
+  timestamp: string;
 }
 
 export interface Trace {
   traceId: string;
-
-  // Distributed Tracing Fields
-  parentTraceId?: string; // NEW
-  parentSpanId?: string;  // NEW
-
+  parentTraceId?: string;
+  parentSpanId?: string;
   method: string;
   route: string;
   path: string;
@@ -38,7 +39,6 @@ export interface Trace {
   userAgent?: string;
   timestamp: string;
   spans: Span[];
-  error?: TraceError;
 }
 
 export interface ActiveTrace {
@@ -46,5 +46,4 @@ export interface ActiveTrace {
   startTime: number;
   data: Partial<Trace>;
   spans: Span[];
-  error?: TraceError;
 }

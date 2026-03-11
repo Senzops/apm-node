@@ -23,25 +23,35 @@ export class SenzorClient {
     this.transport = new Transport({ ...options, endpoint });
 
     if (!this.isInstrumented) {
+      this.setupGlobalErrorHandlers();
+
       try { instrumentHttp(endpoint, debug); } catch (e) { }
       try { instrumentFetch(endpoint, debug); } catch (e) { }
       try { instrumentMongo(debug); } catch (e) { }
       try { instrumentPg(); } catch (e) { }
 
       this.isInstrumented = true;
-      if (debug) console.log('[Senzor] Auto-instrumentation enabled');
+      if (debug) console.log('[Senzor] Auto-instrumentation & Error Tracking enabled');
     }
+  }
+
+  private setupGlobalErrorHandlers() {
+    process.on('uncaughtException', (error) => {
+      this.captureError(error, { type: 'uncaughtException' });
+    });
+
+    process.on('unhandledRejection', (reason) => {
+      this.captureError(reason, { type: 'unhandledRejection' });
+    });
   }
 
   public startTrace<T>(data: Partial<ActiveTrace['data']> & { headers?: any }, next: () => T): T {
     if (!this.transport) return next();
 
-    // Trace Propagation Extraction
     let parentTraceId = undefined;
     let parentSpanId = undefined;
 
     if (data.headers) {
-      // Robust header checking (handles Node's lowercase headers and other variants)
       const getHeader = (key: string) => {
         if (data.headers[key]) return data.headers[key];
         if (data.headers[key.toLowerCase()]) return data.headers[key.toLowerCase()];
@@ -51,7 +61,6 @@ export class SenzorClient {
       parentTraceId = getHeader('x-senzor-trace-id');
       parentSpanId = getHeader('x-senzor-parent-span-id');
 
-      // If found, ensure they are strings (headers can be arrays)
       if (Array.isArray(parentTraceId)) parentTraceId = parentTraceId[0];
       if (Array.isArray(parentSpanId)) parentSpanId = parentSpanId[0];
     }
@@ -81,22 +90,38 @@ export class SenzorClient {
       parentSpanId: trace.data.parentSpanId,
       ...trace.data,
       ...extraData,
-      status, duration, spans: trace.spans, timestamp: new Date().toISOString(),
-      error: trace.error
+      status, duration, spans: trace.spans, timestamp: new Date().toISOString()
     };
-    this.transport.add(payload);
+    this.transport.addTrace(payload);
   }
 
-  // --- NEW: Capture Exception ---
-  public captureError(error: unknown) {
+  // --- NEW: Standalone Error Capture ---
+  public captureError(error: unknown, context: any = {}) {
+    if (!this.transport) return;
+
+    let parsedError: Error;
     if (error instanceof Error) {
-      Context.setError(error);
-    } else if (typeof error === 'string') {
-      Context.setError(new Error(error));
+      parsedError = error;
+    } else {
+      parsedError = new Error(String(error));
     }
+
+    // Attempt to link to active trace
+    const currentTrace = Context.current();
+
+    this.transport.addError({
+      errorClass: parsedError.name || 'Error',
+      message: parsedError.message,
+      stackTrace: parsedError.stack,
+      traceId: currentTrace?.id,
+      context,
+      timestamp: new Date().toISOString()
+    });
   }
 
-  public track(data: any) { this.transport?.add({ traceId: randomUUID(), ...data, spans: [], timestamp: new Date().toISOString() }); }
+  public track(data: any) {
+    this.transport?.addTrace({ traceId: randomUUID(), ...data, spans: [], timestamp: new Date().toISOString() });
+  }
 
   public startSpan(name: string, type: 'db' | 'http' | 'function' | 'custom' = 'custom') {
     const trace = Context.current();
