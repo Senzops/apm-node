@@ -12,6 +12,10 @@ const Senzor = {
   startSpan: client.startSpan.bind(client),
   captureException: client.captureError.bind(client),
 
+  // Task Monitoring (NEW)
+  wrapTask: client.wrapTask.bind(client),
+  startTask: client.startTask.bind(client),
+
   // Express
   requestHandler: expressMiddleware,
   errorHandler: expressErrorHandler,

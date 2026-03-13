@@ -1,10 +1,12 @@
 import { Transport } from './transport';
 import { Context } from './context';
-import { SenzorOptions, ActiveTrace } from './types';
+import { SenzorOptions, ActiveTrace, TaskRun } from './types';
 import { randomUUID } from 'crypto';
 import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
 import { instrumentMongo } from '../instrumentation/mongo';
 import { instrumentPg } from '../instrumentation/pg';
+import { instrumentBullMQ } from '../instrumentation/bullmq';
+import { instrumentNodeCron } from '../instrumentation/cron';
 
 export class SenzorClient {
   private transport: Transport | null = null;
@@ -29,6 +31,10 @@ export class SenzorClient {
       try { instrumentFetch(endpoint, debug); } catch (e) { }
       try { instrumentMongo(debug); } catch (e) { }
       try { instrumentPg(); } catch (e) { }
+
+      // Task Integrations (NEW)
+      try { instrumentBullMQ(this, debug); } catch (e) { }
+      try { instrumentNodeCron(this, debug); } catch (e) { }
 
       this.isInstrumented = true;
       if (debug) console.log('[Senzor] Auto-instrumentation & Error Tracking enabled');
@@ -67,6 +73,7 @@ export class SenzorClient {
 
     const trace: ActiveTrace = {
       id: randomUUID(),
+      contextType: 'apm', // Ensure we distinguish APM traces from Background Tasks
       startTime: performance.now(),
       data: {
         ...data,
@@ -81,7 +88,7 @@ export class SenzorClient {
 
   public endTrace(status: number, extraData: any = {}) {
     const trace = Context.current();
-    if (!trace || !this.transport) return;
+    if (!trace || trace.contextType !== 'apm' || !this.transport) return;
     const duration = performance.now() - trace.startTime;
 
     const payload = {
@@ -95,7 +102,62 @@ export class SenzorClient {
     this.transport.addTrace(payload);
   }
 
-  // --- NEW: Standalone Error Capture ---
+  // --- NEW: TASK MONITORING METHODS ---
+  public startTask<T>(name: string, type: 'cron' | 'queue' | 'pipeline' | 'custom', options: any, next: () => T): T {
+    if (!this.transport) return next();
+
+    // Distributed Tracing: If an APM trace spawns this task (e.g. queueing a job inside an API)
+    const currentContext = Context.current();
+    const triggerTraceId = currentContext?.contextType === 'apm' ? currentContext.id : undefined;
+
+    const task: ActiveTrace = {
+      id: randomUUID(),
+      contextType: 'task',
+      startTime: performance.now(),
+      data: { taskName: name, taskType: type, triggerTraceId, ...options },
+      spans: []
+    };
+    return Context.run(task, next);
+  }
+
+  public endTask(status: 'success' | 'failed', extraMetadata: any = {}) {
+    const task = Context.current();
+    if (!task || task.contextType !== 'task' || !this.transport) return;
+
+    const payload: TaskRun = {
+      runId: task.id,
+      taskName: task.data.taskName,
+      taskType: task.data.taskType,
+      triggerTraceId: task.data.triggerTraceId,
+      queueDelay: task.data.queueDelay,
+      attempts: task.data.attempts,
+      metadata: { ...task.data.metadata, ...extraMetadata },
+      status,
+      duration: performance.now() - task.startTime,
+      spans: task.spans,
+      timestamp: new Date().toISOString()
+    };
+    // addTask relies on the new task Queue array in your transport.ts update
+    this.transport.addTask(payload);
+  }
+
+  public wrapTask<T extends (...args: any[]) => any>(name: string, type: 'cron' | 'queue' | 'pipeline' | 'custom', options: any = {}, fn: T): T {
+    return (async (...args: any[]) => {
+      return this.startTask(name, type, options, async () => {
+        try {
+          const result = await fn(...args);
+          this.endTask('success');
+          return result;
+        } catch (error) {
+          this.captureError(error, { taskName: name });
+          this.endTask('failed');
+          throw error;
+        }
+      });
+    }) as unknown as T;
+  }
+
+  // --- MODIFIED: Context-Aware Error Capture ---
   public captureError(error: unknown, context: any = {}) {
     if (!this.transport) return;
 
@@ -106,17 +168,21 @@ export class SenzorClient {
       parsedError = new Error(String(error));
     }
 
-    // Attempt to link to active trace
     const currentTrace = Context.current();
 
-    this.transport.addError({
+    const errPayload = {
       errorClass: parsedError.name || 'Error',
       message: parsedError.message,
       stackTrace: parsedError.stack,
-      traceId: currentTrace?.id,
       context,
       timestamp: new Date().toISOString()
-    });
+    };
+
+    if (currentTrace?.contextType === 'task') {
+      this.transport.addError({ ...errPayload, runId: currentTrace.id }, 'task');
+    } else {
+      this.transport.addError({ ...errPayload, traceId: currentTrace?.id }, 'apm');
+    }
   }
 
   public track(data: any) {

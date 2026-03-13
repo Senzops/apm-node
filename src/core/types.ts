@@ -16,12 +16,12 @@ export interface Span {
   meta?: Record<string, any>;
 }
 
-// NEW: Standalone Error Event
 export interface SenzorError {
   errorClass: string;
   message: string;
   stackTrace?: string;
-  traceId?: string;
+  traceId?: string; // Maps to APM traceId
+  runId?: string;   // Maps to Task runId
   context?: any;
   timestamp: string;
 }
@@ -41,9 +41,25 @@ export interface Trace {
   spans: Span[];
 }
 
+export interface TaskRun {
+  runId: string;
+  taskName: string;
+  taskType: 'cron' | 'queue' | 'pipeline' | 'custom';
+  status: 'success' | 'failed';
+  duration: number;
+  queueDelay?: number;
+  attempts?: number;
+  triggerTraceId?: string;
+  metadata?: any;
+  spans: Span[];
+  timestamp: string;
+}
+
+// Unified Context Payload for async_hooks
 export interface ActiveTrace {
-  id: string;
+  id: string; // The APM traceId OR the Task runId
+  contextType: 'apm' | 'task';
   startTime: number;
-  data: Partial<Trace>;
+  data: any; // Holds Partial<Trace> or Partial<TaskRun>
   spans: Span[];
 }
