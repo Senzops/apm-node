@@ -3,24 +3,39 @@ import { hookRequire } from './hook';
 
 export const instrumentNodeCron = (client: SenzorClient, debug: boolean) => {
   hookRequire('node-cron', (cronExports) => {
-    if (!cronExports.schedule) return;
 
-    const originalSchedule = cronExports.schedule;
+    // Abstracted patcher so we can apply it to both the root and the .default export
+    const patchSchedule = (target: any) => {
+      if (!target || typeof target.schedule !== 'function' || target.__senzorPatched) return;
 
-    // Mutate the export so that destructuring extracts our wrapped function
-    cronExports.schedule = function (expression: string, func: (...args: any[]) => any, options: any) {
-      const taskName = options?.name || `cron: ${expression}`;
+      const originalSchedule = target.schedule;
 
-      const wrappedFunc = client.wrapTask(
-        taskName,
-        'cron',
-        { metadata: { expression, timezone: options?.timezone } },
-        func
-      );
+      target.schedule = function (expression: string, func: (...args: any[]) => any, options: any) {
+        // Handle node-cron's dynamic options argument (can be string or object)
+        const optsObj = typeof options === 'object' ? options : { timezone: options };
+        const taskName = optsObj?.name || `cron: ${expression}`;
 
-      return originalSchedule.call(this, expression, wrappedFunc, options);
+        const wrappedFunc = client.wrapTask(
+          taskName,
+          'cron',
+          { metadata: optsObj },
+          func
+        );
+
+        return originalSchedule.call(this, expression, wrappedFunc, options);
+      };
+
+      // Safely mark as patched to prevent infinite loops
+      Object.defineProperty(target, '__senzorPatched', { value: true, enumerable: false, writable: true });
+      if (debug) console.log('[Senzor] Node-Cron successfully instrumented');
     };
 
-    if (debug) console.log('[Senzor] Node-Cron auto-instrumentation active');
+    // Apply patch to root (for const cron = require('node-cron'))
+    patchSchedule(cronExports);
+
+    // Apply patch to default (for import cron from 'node-cron')
+    if (cronExports.default) {
+      patchSchedule(cronExports.default);
+    }
   });
 };

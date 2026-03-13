@@ -1,37 +1,24 @@
 import Module from 'module';
 
-/**
- * Intercepts Node's module loading to patch libraries "in the middle".
- * This guarantees that even `import { schedule } from 'node-cron'` 
- * receives the patched function.
- */
 export const hookRequire = (moduleName: string, onRequire: (exports: any) => void) => {
-  const originalLoad = (Module as any)._load;
-  
-  // 1. Intercept future requires
-  (Module as any)._load = function (request: string, parent: any, isMain: boolean) {
-    const exports = originalLoad.apply(this, arguments);
-    
-    // If the requested module matches and hasn't been patched yet
-    if (request === moduleName && exports && !exports.__senzorPatched) {
-      onRequire(exports);
-      exports.__senzorPatched = true; // Prevent infinite loops or double-patching
-    }
-    
-    return exports;
-  };
-
-  // 2. Catch it if it was already loaded into the cache before initialization
+  // 1. If it was already loaded (e.g., imported at the top of the file before init)
   try {
     const resolvedPath = require.resolve(moduleName);
-    if (require.cache[resolvedPath]) {
-      const exports = require.cache[resolvedPath]?.exports;
-      if (exports && !exports.__senzorPatched) {
-        onRequire(exports);
-        exports.__senzorPatched = true;
-      }
+    const cached = require.cache[resolvedPath];
+    if (cached && cached.exports) {
+      onRequire(cached.exports);
     }
   } catch (e) {
-    // Module not installed, fail silently
+    // Silently ignore if module is not installed
   }
+
+  // 2. Intercept future requires
+  const originalLoad = (Module as any)._load;
+  (Module as any)._load = function (request: string, parent: any, isMain: boolean) {
+    const exports = originalLoad.apply(this, arguments);
+    if (request === moduleName && exports) {
+      onRequire(exports);
+    }
+    return exports;
+  };
 };
