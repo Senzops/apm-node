@@ -102,18 +102,23 @@ export class SenzorClient {
     this.transport.addTrace(payload);
   }
 
-  // --- NEW: TASK MONITORING METHODS ---
+  // --- TASK MONITORING METHODS ---
   public startTask<T>(name: string, type: 'cron' | 'queue' | 'pipeline' | 'custom', options: any, next: () => T): T {
     if (!this.transport) return next();
 
-    // Distributed Tracing: If an APM trace spawns this task (e.g. queueing a job inside an API)
     const currentContext = Context.current();
     const triggerTraceId = currentContext?.contextType === 'apm' ? currentContext.id : undefined;
+
+    // Snapshot system resources before execution
+    const startMemory = process.memoryUsage ? process.memoryUsage().heapUsed : 0;
+    const startCpu = process.cpuUsage ? process.cpuUsage() : undefined;
 
     const task: ActiveTrace = {
       id: randomUUID(),
       contextType: 'task',
       startTime: performance.now(),
+      startMemory,
+      startCpu,
       data: { taskName: name, taskType: type, triggerTraceId, ...options },
       spans: []
     };
@@ -124,6 +129,19 @@ export class SenzorClient {
     const task = Context.current();
     if (!task || task.contextType !== 'task' || !this.transport) return;
 
+    // Calculate resource deltas
+    let resourceMetrics;
+    if (process.memoryUsage && task.startMemory !== undefined && process.cpuUsage && task.startCpu) {
+      const endMemory = process.memoryUsage().heapUsed;
+      const cpuDelta = process.cpuUsage(task.startCpu);
+
+      resourceMetrics = {
+        memoryDeltaBytes: endMemory - task.startMemory, // Can be negative if GC ran!
+        cpuUserUs: cpuDelta.user,
+        cpuSystemUs: cpuDelta.system
+      };
+    }
+
     const payload: TaskRun = {
       runId: task.id,
       taskName: task.data.taskName,
@@ -131,13 +149,15 @@ export class SenzorClient {
       triggerTraceId: task.data.triggerTraceId,
       queueDelay: task.data.queueDelay,
       attempts: task.data.attempts,
+      isDeadLetter: task.data.isDeadLetter, // Extracted from options/metadata if provided
       metadata: { ...task.data.metadata, ...extraMetadata },
+      resourceMetrics,
       status,
       duration: performance.now() - task.startTime,
       spans: task.spans,
       timestamp: new Date().toISOString()
     };
-    // addTask relies on the new task Queue array in your transport.ts update
+
     this.transport.addTask(payload);
   }
 

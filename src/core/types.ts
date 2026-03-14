@@ -41,6 +41,12 @@ export interface Trace {
   spans: Span[];
 }
 
+export interface ResourceMetrics {
+  memoryDeltaBytes: number; // Delta of process.memoryUsage().heapUsed
+  cpuUserUs: number;        // CPU time spent in user space (microseconds)
+  cpuSystemUs: number;      // CPU time spent in OS system calls (microseconds)
+}
+
 export interface TaskRun {
   runId: string;
   taskName: string;
@@ -51,6 +57,8 @@ export interface TaskRun {
   attempts?: number;
   triggerTraceId?: string;
   metadata?: any;
+  resourceMetrics?: ResourceMetrics; // Hardware cost profiling
+  isDeadLetter?: boolean;            // True if the job failed its final retry
   spans: Span[];
   timestamp: string;
 }
@@ -60,6 +68,8 @@ export interface ActiveTrace {
   id: string; // The APM traceId OR the Task runId
   contextType: 'apm' | 'task';
   startTime: number;
+  startMemory?: number; // Baseline heap
+  startCpu?: NodeJS.CpuUsage; // Baseline CPU tick
   data: any; // Holds Partial<Trace> or Partial<TaskRun>
   spans: Span[];
 }

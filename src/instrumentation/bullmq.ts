@@ -11,20 +11,45 @@ export const instrumentBullMQ = (client: SenzorClient, debug: boolean) => {
 
       target.Worker.prototype.processJob = async function (job: any) {
         const queueDelay = job.timestamp ? Date.now() - job.timestamp : 0;
-        const attempts = (job.attemptsMade || 0) + 1;
+
+        // BullMQ increments attemptsMade *after* a failure. 
+        // So the current run attempt is attemptsMade + 1.
+        const currentAttempt = (job.attemptsMade || 0) + 1;
+        const maxAttempts = job.opts?.attempts || 1;
+
+        // If it fails on this run, and it's >= the max allowed attempts, it's entering the DLQ.
+        const isFinalAttempt = currentAttempt >= maxAttempts;
+
         const taskName = job.name === '__default__' ? job.queueName : `${job.queueName}:${job.name}`;
 
         return client.startTask(
           taskName,
           'queue',
-          { queueDelay, attempts, metadata: { jobId: job.id, queueName: job.queueName } },
+          {
+            queueDelay,
+            attempts: currentAttempt,
+            // We preset isDeadLetter to false, but if it throws an error and isFinalAttempt is true, 
+            // we will mutate this in the catch block.
+            isDeadLetter: false,
+            metadata: { jobId: job.id, queueName: job.queueName, maxAttempts }
+          },
           async () => {
             try {
               const result = await originalProcessJob.apply(this, arguments);
               client.endTask('success');
               return result;
             } catch (error) {
-              client.captureError(error, { queueName: job.queueName, jobId: job.id });
+              const context = require('../core/context').Context.current();
+              if (context && context.contextType === 'task' && isFinalAttempt) {
+                context.data.isDeadLetter = true; // Flag it as a permanent failure
+              }
+
+              client.captureError(error, {
+                queueName: job.queueName,
+                jobId: job.id,
+                isDeadLetter: isFinalAttempt
+              });
+
               client.endTask('failed');
               throw error;
             }
@@ -33,7 +58,7 @@ export const instrumentBullMQ = (client: SenzorClient, debug: boolean) => {
       };
 
       Object.defineProperty(target.Worker.prototype.processJob, '__senzorPatched', { value: true, enumerable: false, writable: true });
-      if (debug) console.log('[Senzor] BullMQ Worker successfully instrumented');
+      if (debug) console.log('[Senzor] BullMQ Worker successfully instrumented with DLQ tracking');
     };
 
     patchWorker(bullExports);
