@@ -7,6 +7,7 @@ import { instrumentMongo } from '../instrumentation/mongo';
 import { instrumentPg } from '../instrumentation/pg';
 import { instrumentBullMQ } from '../instrumentation/bullmq';
 import { instrumentNodeCron } from '../instrumentation/cron';
+import { SDK_META } from '../utils/sdkMeta';
 
 export class SenzorClient {
   private transport: Transport | null = null;
@@ -42,12 +43,142 @@ export class SenzorClient {
   }
 
   private setupGlobalErrorHandlers() {
+    if ((process as any).__senzorGlobalHandlersInstalled) {
+      return;
+    }
+
+    (process as any).__senzorGlobalHandlersInstalled = true;
+
+    const getProcessContext = () => {
+      try {
+        return {
+          pid: process.pid,
+          ppid: process.ppid,
+          platform: process.platform,
+          uptimeSec: Math.floor(process.uptime()),
+          env: process.env.NODE_ENV || 'unknown'
+        };
+      } catch {
+        return {};
+      }
+    };
+
+    const getMemoryContext = () => {
+      try {
+        const mem = process.memoryUsage();
+        return {
+          rss: mem.rss,
+          heapTotal: mem.heapTotal,
+          heapUsed: mem.heapUsed,
+          external: mem.external,
+          arrayBuffers: mem.arrayBuffers
+        };
+      } catch {
+        return {};
+      }
+    };
+
+    const safeCapture = (error: unknown, meta: any = {}) => {
+      try {
+        let parsedError: Error;
+        if (error instanceof Error) {
+          parsedError = error;
+        } else if (typeof error === 'string') {
+          parsedError = new Error(error);
+        } else {
+          try {
+            parsedError = new Error(JSON.stringify(error));
+          } catch {
+            parsedError = new Error('Non-serializable rejection reason');
+          }
+        }
+        const enrichedMeta = {
+          ...meta,
+          runtime: {
+            name: 'node',
+            version: process.version
+          },
+          process: getProcessContext(),
+          memory: getMemoryContext(),
+          sdk: {
+            name: SDK_META.name,
+            version: SDK_META.version
+          }
+        };
+
+        this.captureError(parsedError, enrichedMeta);
+      } catch (internalFailure) {
+        // NEVER allow SDK to crash host app
+        try {
+          if (this.options?.debug) {
+            console.error('[Senzor] Error handler failure:', internalFailure);
+          }
+        } catch { }
+      }
+    };
+
+    process.on('uncaughtExceptionMonitor', (error) => {
+      safeCapture(error, {
+        type: 'uncaughtExceptionMonitor',
+        severity: 'fatal'
+      });
+    });
+
     process.on('uncaughtException', (error) => {
-      this.captureError(error, { type: 'uncaughtException' });
+      safeCapture(error, {
+        type: 'uncaughtException',
+        severity: 'fatal'
+      });
     });
 
     process.on('unhandledRejection', (reason) => {
-      this.captureError(reason, { type: 'unhandledRejection' });
+      safeCapture(reason, {
+        type: 'unhandledRejection',
+        severity: 'error'
+      });
+    });
+
+    process.on('warning', (warning) => {
+      safeCapture(warning, {
+        type: 'processWarning',
+        severity: 'warning'
+      });
+    });
+
+    process.on('multipleResolves', (type, promise, reason) => {
+      safeCapture(reason || new Error('Multiple promise resolves'), {
+        type: 'multipleResolves',
+        resolveType: type,
+        severity: 'warning'
+      });
+    });
+
+    process.on('rejectionHandled', (promise) => {
+      if (this.options?.debug) {
+        try {
+          console.warn('[Senzor] rejectionHandled event detected');
+        } catch { }
+      }
+    });
+
+    process.on('SIGTERM', () => {
+      safeCapture(
+        new Error('Process received SIGTERM'),
+        {
+          type: 'processSignal',
+          signal: 'SIGTERM'
+        }
+      );
+    });
+
+    process.on('SIGINT', () => {
+      safeCapture(
+        new Error('Process received SIGINT'),
+        {
+          type: 'processSignal',
+          signal: 'SIGINT'
+        }
+      );
     });
   }
 
