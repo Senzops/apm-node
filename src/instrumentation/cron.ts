@@ -1,46 +1,113 @@
 import type { SenzorClient } from '../core/client';
 import { hookRequire } from './hook';
 
-const SENZOR_CRON_PATCHED =
-  Symbol.for('senzor.nodecron.patched');
+const PATCHED =
+  Symbol.for('senzor.cron.patched');
 
-type ScheduleFn =
-  (expression: string,
-    func: (...args: unknown[]) => unknown,
-    options?: unknown) => unknown;
+type CronHandler =
+  (...args: unknown[]) => unknown;
 
-function getTargets(
-  exports: unknown
-): any[] {
+type CronSchedule =
+  (
+    expression: string,
+    handler: CronHandler,
+    options?: unknown
+  ) => unknown;
 
-  const targets: any[] = [];
+function normalizeOptions(
+  options: unknown
+): Record<string, unknown> {
 
-  if (exports) {
-    targets.push(exports);
+  if (
+    typeof options === 'object' &&
+    options !== null
+  ) {
+    return options as Record<
+      string,
+      unknown
+    >;
   }
 
-  if ((exports as any)?.default) {
-    targets.push((exports as any).default);
+  // backward compatibility with:
+  // cron.schedule(expr, fn, "UTC")
+  if (options) {
+    return { timezone: options };
   }
 
-  return targets;
+  return {};
 
 }
 
-export const instrumentNodeCron = (
+function patchTarget(
+  target: Record<string, unknown>,
   client: SenzorClient,
   debug: boolean
-) => {
+): void {
 
-  hookRequire(
-    'node-cron',
-    (cronExports) => {
+  const schedule =
+    target.schedule as
+    CronSchedule | undefined;
+
+  if (
+    typeof schedule !== 'function' ||
+    (schedule as any)[PATCHED]
+  ) {
+    return;
+  }
+
+  const original =
+    schedule;
+
+  const wrapped: CronSchedule =
+    function (
+      this: unknown,
+      expression,
+      handler,
+      options
+    ) {
+
+      if (
+        typeof handler !==
+        'function'
+      ) {
+
+        return original.call(
+          this,
+          expression,
+          handler,
+          options
+        );
+
+      }
 
       try {
 
-        for (const target of getTargets(cronExports)) {
-          patchSchedule(target);
-        }
+        const opts =
+          normalizeOptions(
+            options
+          );
+
+        const taskName =
+          (opts as any)?.name ??
+          `cron: ${expression}`;
+
+        const wrappedHandler =
+          client.wrapTask(
+            taskName,
+            'cron',
+            {
+              expression,
+              metadata: opts
+            },
+            handler
+          );
+
+        return original.call(
+          this,
+          expression,
+          wrappedHandler,
+          options
+        );
 
       }
       catch (err) {
@@ -48,130 +115,90 @@ export const instrumentNodeCron = (
         if (debug) {
 
           console.error(
-            '[Senzor] cron instrumentation error:',
+            '[Senzor] cron wrap failed',
             err
           );
 
         }
 
+        return original.call(
+          this,
+          expression,
+          handler,
+          options
+        );
+
       }
 
+    };
+
+  Object.defineProperty(
+    wrapped,
+    PATCHED,
+    {
+      value: true,
+      enumerable: false
     }
   );
 
-  function patchSchedule(
-    target: any
-  ): void {
-
-    if (!target) return;
-
-    const schedule =
-      target.schedule as ScheduleFn;
-
-    if (
-      typeof schedule !== 'function' ||
-      (schedule as any)[SENZOR_CRON_PATCHED]
-    ) {
-      return;
-    }
-
-    const originalSchedule =
-      schedule;
-
-    const wrappedSchedule: ScheduleFn =
-      function (
-        this: unknown,
-        expression,
-        func,
-        options
-      ) {
-
-        if (typeof func !== 'function') {
-
-          return originalSchedule.call(
-            this,
-            expression,
-            func,
-            options
-          );
-
-        }
-
-        try {
-
-          const optsObj =
-            typeof options === 'object' &&
-              options !== null
-              ? options as Record<string, unknown>
-              : options
-                ? { timezone: options }
-                : {};
-
-          const taskName =
-            (optsObj as any)?.name ||
-            `cron: ${expression}`;
-
-          const wrapped =
-            client.wrapTask(
-              taskName,
-              'cron',
-              {
-                expression,
-                metadata: optsObj
-              },
-              func
-            );
-
-          return originalSchedule.call(
-            this,
-            expression,
-            wrapped,
-            options
-          );
-
-        }
-        catch (err) {
-
-          if (debug) {
-
-            console.error(
-              '[Senzor] cron wrap failed:',
-              err
-            );
-
-          }
-
-          return originalSchedule.call(
-            this,
-            expression,
-            func,
-            options
-          );
-
-        }
-
-      };
-
-    Object.defineProperty(
-      wrappedSchedule,
-      SENZOR_CRON_PATCHED,
-      {
-        value: true,
-        enumerable: false
-      }
-    );
+  // Some ESM namespace exports are frozen
+  try {
 
     target.schedule =
-      wrappedSchedule;
+      wrapped;
+
+  }
+  catch {
 
     if (debug) {
 
-      console.log(
-        '[Senzor] Node-Cron instrumented'
+      console.warn(
+        '[Senzor] unable to patch cron schedule (readonly export)'
       );
 
     }
 
   }
 
-};
+  if (debug) {
+
+    console.log(
+      '[Senzor] node-cron instrumented'
+    );
+
+  }
+
+}
+
+export const instrumentNodeCron =
+  (
+    client: SenzorClient,
+    debug: boolean
+  ): void => {
+
+    hookRequire(
+      'node-cron',
+      (exports: any) => {
+
+        if (!exports) return;
+
+        patchTarget(
+          exports,
+          client,
+          debug
+        );
+
+        if (exports.default) {
+
+          patchTarget(
+            exports.default,
+            client,
+            debug
+          );
+
+        }
+
+      }
+    );
+
+  };

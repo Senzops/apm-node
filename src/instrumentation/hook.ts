@@ -1,23 +1,35 @@
 import Module from 'module';
 
-const SENZOR_PATCHED = Symbol.for('senzor.require.patched');
-const SENZOR_HOOKS = Symbol.for('senzor.require.hooks');
+const SENZOR_PATCHED =
+  Symbol.for('senzor.require.patched');
 
-type HookFn = (exports: any) => void;
+const SENZOR_HOOKS =
+  Symbol.for('senzor.require.hooks');
 
-type HookMap = Map<string, HookFn[]>;
+type HookFn =
+  (exports: unknown) => void;
+
+type HookMap =
+  Map<string, HookFn[]>;
 
 function getHookRegistry(): HookMap {
 
-  const mod = Module as any;
+  const mod =
+    Module as unknown as Record<
+      symbol,
+      HookMap
+    >;
 
   if (!mod[SENZOR_HOOKS]) {
 
-    Object.defineProperty(mod, SENZOR_HOOKS, {
-      value: new Map(),
-      enumerable: false,
-      configurable: false
-    });
+    Object.defineProperty(
+      mod,
+      SENZOR_HOOKS,
+      {
+        value: new Map(),
+        enumerable: false
+      }
+    );
 
   }
 
@@ -25,73 +37,75 @@ function getHookRegistry(): HookMap {
 
 }
 
-function safelyExecuteHooks(
+function runHooks(
   moduleName: string,
-  exports: any
+  exports: unknown
 ) {
 
-  try {
+  const registry =
+    (Module as unknown as Record<
+      symbol,
+      HookMap
+    >)[SENZOR_HOOKS];
 
-    const hooks: HookMap =
-      (Module as any)[SENZOR_HOOKS];
+  if (!registry) return;
 
-    const moduleHooks =
-      hooks?.get(moduleName);
+  const hooks =
+    registry.get(moduleName);
 
-    if (!moduleHooks?.length) {
-      return;
+  if (!hooks?.length) return;
+
+  for (const hook of hooks) {
+
+    try {
+      hook(exports);
+    }
+    catch (err) {
+
+      console.error(
+        `[Senzor] instrumentation failed for ${moduleName}`,
+        err
+      );
+
     }
 
-    for (const hook of moduleHooks) {
-
-      try {
-        hook(exports);
-      }
-      catch (err) {
-
-        console.error(
-          `[Senzor] instrumentation failed for ${moduleName}:`,
-          err
-        );
-
-      }
-
-    }
-
-  }
-  catch {
-    // never break require
   }
 
 }
 
 function patchLoaderOnce() {
 
-  const mod = Module as any;
+  const mod =
+    Module as unknown as any;
 
   if (mod[SENZOR_PATCHED]) {
     return;
   }
 
-  const originalLoad = mod._load;
+  const previousLoad =
+    mod._load;
 
-  mod._load = function (
-    request: string,
-    parent: any,
-    isMain: boolean
-  ) {
+  mod._load =
+    function patchedLoad(
+      request: string,
+      parent: unknown,
+      isMain: boolean
+    ) {
 
-    const exports =
-      originalLoad.apply(this, arguments);
+      const exports =
+        previousLoad.apply(
+          this,
+          arguments
+        );
 
-    safelyExecuteHooks(
-      request,
-      exports
-    );
+      runHooks(
+        request,
+        exports
+      );
 
-    return exports;
+      return exports;
 
-  };
+    };
 
   Object.defineProperty(
     mod,
@@ -104,7 +118,7 @@ function patchLoaderOnce() {
 
 }
 
-function patchCachedModule(
+function patchCached(
   moduleName: string,
   hook: HookFn
 ) {
@@ -112,35 +126,29 @@ function patchCachedModule(
   try {
 
     const resolved =
-      require.resolve(moduleName);
+      require.resolve(
+        moduleName
+      );
 
     const cached =
-      require.cache?.[resolved];
+      require.cache?.[
+      resolved
+      ];
 
     if (cached?.exports) {
 
-      try {
-        hook(cached.exports);
-      }
-      catch (err) {
-
-        console.error(
-          `[Senzor] cached instrumentation failed for ${moduleName}:`,
-          err
-        );
-
-      }
+      hook(
+        cached.exports
+      );
 
     }
 
   }
-  catch {
-    // module not installed or ESM
-  }
+  catch { }
 
 }
 
-function tryRequirePatch(
+function tryRequire(
   moduleName: string,
   hook: HookFn
 ) {
@@ -155,40 +163,85 @@ function tryRequirePatch(
     }
 
   }
-  catch {
-    // ignore (ESM or not installed)
-  }
+  catch { }
 
 }
 
-export const hookRequire = (
+function retryPatch(
   moduleName: string,
-  onRequire: HookFn
-) => {
+  hook: HookFn
+) {
 
-  const hooks =
-    getHookRegistry();
+  let attempts = 0;
 
-  if (!hooks.has(moduleName)) {
-    hooks.set(moduleName, []);
-  }
+  const max = 5;
 
-  hooks
-    .get(moduleName)!
-    .push(onRequire);
+  const timer =
+    setInterval(() => {
 
-  patchLoaderOnce();
+      attempts++;
 
-  // already loaded modules
-  patchCachedModule(
-    moduleName,
-    onRequire
-  );
+      try {
 
-  // CJS fallback
-  tryRequirePatch(
-    moduleName,
-    onRequire
-  );
+        const mod =
+          require(moduleName);
 
-};
+        if (mod) {
+
+          hook(mod);
+
+          clearInterval(timer);
+
+        }
+
+      }
+      catch { }
+
+      if (attempts >= max) {
+        clearInterval(timer);
+      }
+
+    }, 200);
+
+}
+
+export const hookRequire =
+  (
+    moduleName: string,
+    onRequire: HookFn
+  ) => {
+
+    const registry =
+      getHookRegistry();
+
+    if (!registry.has(moduleName)) {
+
+      registry.set(
+        moduleName,
+        []
+      );
+
+    }
+
+    registry
+      .get(moduleName)!
+      .push(onRequire);
+
+    patchLoaderOnce();
+
+    patchCached(
+      moduleName,
+      onRequire
+    );
+
+    tryRequire(
+      moduleName,
+      onRequire
+    );
+
+    retryPatch(
+      moduleName,
+      onRequire
+    );
+
+  };
