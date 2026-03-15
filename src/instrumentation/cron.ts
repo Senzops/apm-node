@@ -1,41 +1,138 @@
 import type { SenzorClient } from '../core/client';
 import { hookRequire } from './hook';
 
-export const instrumentNodeCron = (client: SenzorClient, debug: boolean) => {
-  hookRequire('node-cron', (cronExports) => {
+const SENZOR_CRON_PATCHED =
+  Symbol.for('senzor.nodecron.patched');
 
-    // Abstracted patcher so we can apply it to both the root and the .default export
-    const patchSchedule = (target: any) => {
-      if (!target || typeof target.schedule !== 'function' || target.__senzorPatched) return;
+function getTargets(exports: any) {
 
-      const originalSchedule = target.schedule;
+  const targets = [];
 
-      target.schedule = function (expression: string, func: (...args: any[]) => any, options: any) {
-        // Handle node-cron's dynamic options argument (can be string or object)
-        const optsObj = typeof options === 'object' ? options : { timezone: options };
-        const taskName = optsObj?.name || `cron: ${expression}`;
+  if (exports) {
+    targets.push(exports);
+  }
 
-        const wrappedFunc = client.wrapTask(
-          taskName,
-          'cron',
-          { metadata: optsObj },
-          func
+  if (exports?.default) {
+    targets.push(exports.default);
+  }
+
+  return targets;
+
+}
+
+export const instrumentNodeCron = (
+  client: SenzorClient,
+  debug: boolean
+) => {
+
+  hookRequire(
+    'node-cron',
+    (cronExports) => {
+
+      for (const target of getTargets(cronExports)) {
+        patchSchedule(target);
+      }
+
+    }
+  );
+
+  function patchSchedule(target: any) {
+
+    if (
+      !target ||
+      typeof target.schedule !== 'function' ||
+      target[SENZOR_CRON_PATCHED]
+    ) {
+      return;
+    }
+
+    const originalSchedule = target.schedule;
+
+    target.schedule = function () {
+
+      try {
+
+        const expression = arguments[0];
+        const func = arguments[1];
+        const options = arguments[2];
+
+        if (typeof func !== 'function') {
+          return originalSchedule.apply(
+            this,
+            arguments as any
+          );
+        }
+
+        const optsObj =
+          typeof options === 'object' &&
+            options !== null
+            ? options
+            : options
+              ? { timezone: options }
+              : {};
+
+        const taskName =
+          optsObj?.name ||
+          `cron: ${expression}`;
+
+        const wrapped =
+          client.wrapTask(
+            taskName,
+            'cron',
+            {
+              metadata: optsObj,
+              expression
+            },
+            func
+          );
+
+        const newArgs = [
+          expression,
+          wrapped,
+          options
+        ];
+
+        return originalSchedule.apply(
+          this,
+          newArgs
         );
 
-        return originalSchedule.call(this, expression, wrappedFunc, options);
-      };
+      }
+      catch (err) {
 
-      // Safely mark as patched to prevent infinite loops
-      Object.defineProperty(target, '__senzorPatched', { value: true, enumerable: false, writable: true });
-      if (debug) console.log('[Senzor] Node-Cron successfully instrumented');
+        if (debug) {
+          console.error(
+            '[Senzor] Node-Cron patch error:',
+            err
+          );
+        }
+
+        return originalSchedule.apply(
+          this,
+          arguments as any
+        );
+
+      }
+
     };
 
-    // Apply patch to root (for const cron = require('node-cron'))
-    patchSchedule(cronExports);
+    Object.defineProperty(
+      target,
+      SENZOR_CRON_PATCHED,
+      {
+        value: true,
+        enumerable: false
+      }
+    );
 
-    // Apply patch to default (for import cron from 'node-cron')
-    if (cronExports.default) {
-      patchSchedule(cronExports.default);
+    if (debug) {
+
+      console.log(
+        '[Senzor] Node-Cron successfully instrumented'
+      );
+
     }
-  });
+
+  }
+
 };
