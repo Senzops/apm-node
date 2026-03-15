@@ -12,18 +12,57 @@ function getHookRegistry(): HookMap {
   const mod = Module as any;
 
   if (!mod[SENZOR_HOOKS]) {
-    Object.defineProperty(
-      mod,
-      SENZOR_HOOKS,
-      {
-        value: new Map(),
-        enumerable: false,
-        configurable: false
-      }
-    );
+
+    Object.defineProperty(mod, SENZOR_HOOKS, {
+      value: new Map(),
+      enumerable: false,
+      configurable: false
+    });
+
   }
 
   return mod[SENZOR_HOOKS];
+
+}
+
+function safelyExecuteHooks(
+  moduleName: string,
+  exports: any
+) {
+
+  try {
+
+    const hooks: HookMap =
+      (Module as any)[SENZOR_HOOKS];
+
+    const moduleHooks =
+      hooks?.get(moduleName);
+
+    if (!moduleHooks?.length) {
+      return;
+    }
+
+    for (const hook of moduleHooks) {
+
+      try {
+        hook(exports);
+      }
+      catch (err) {
+
+        console.error(
+          `[Senzor] instrumentation failed for ${moduleName}:`,
+          err
+        );
+
+      }
+
+    }
+
+  }
+  catch {
+    // never break require
+  }
+
 }
 
 function patchLoaderOnce() {
@@ -36,37 +75,22 @@ function patchLoaderOnce() {
 
   const originalLoad = mod._load;
 
-  mod._load = function (request: string, parent: any, isMain: boolean) {
+  mod._load = function (
+    request: string,
+    parent: any,
+    isMain: boolean
+  ) {
 
-    const exports = originalLoad.apply(this, arguments);
+    const exports =
+      originalLoad.apply(this, arguments);
 
-    try {
-
-      const hooks: HookMap = mod[SENZOR_HOOKS];
-
-      const moduleHooks = hooks?.get(request);
-
-      if (moduleHooks?.length) {
-
-        for (const hook of moduleHooks) {
-
-          try {
-            hook(exports);
-          }
-          catch (err) {
-            console.error('[Senzor] Module hook error:', err);
-          }
-
-        }
-
-      }
-
-    }
-    catch {
-      // never break module loading
-    }
+    safelyExecuteHooks(
+      request,
+      exports
+    );
 
     return exports;
+
   };
 
   Object.defineProperty(
@@ -74,8 +98,7 @@ function patchLoaderOnce() {
     SENZOR_PATCHED,
     {
       value: true,
-      enumerable: false,
-      configurable: false
+      enumerable: false
     }
   );
 
@@ -88,9 +111,11 @@ function patchCachedModule(
 
   try {
 
-    const resolved = require.resolve(moduleName);
+    const resolved =
+      require.resolve(moduleName);
 
-    const cached = require.cache?.[resolved];
+    const cached =
+      require.cache?.[resolved];
 
     if (cached?.exports) {
 
@@ -98,17 +123,40 @@ function patchCachedModule(
         hook(cached.exports);
       }
       catch (err) {
+
         console.error(
-          '[Senzor] Cached module hook error:',
+          `[Senzor] cached instrumentation failed for ${moduleName}:`,
           err
         );
+
       }
 
     }
 
   }
   catch {
-    // module not installed
+    // module not installed or ESM
+  }
+
+}
+
+function tryRequirePatch(
+  moduleName: string,
+  hook: HookFn
+) {
+
+  try {
+
+    const mod =
+      require(moduleName);
+
+    if (mod) {
+      hook(mod);
+    }
+
+  }
+  catch {
+    // ignore (ESM or not installed)
   }
 
 }
@@ -118,17 +166,27 @@ export const hookRequire = (
   onRequire: HookFn
 ) => {
 
-  const hooks = getHookRegistry();
+  const hooks =
+    getHookRegistry();
 
   if (!hooks.has(moduleName)) {
     hooks.set(moduleName, []);
   }
 
-  hooks.get(moduleName)!.push(onRequire);
+  hooks
+    .get(moduleName)!
+    .push(onRequire);
 
   patchLoaderOnce();
 
+  // already loaded modules
   patchCachedModule(
+    moduleName,
+    onRequire
+  );
+
+  // CJS fallback
+  tryRequirePatch(
     moduleName,
     onRequire
   );

@@ -2,9 +2,13 @@ import type { SenzorClient } from '../core/client';
 import { hookRequire } from './hook';
 import { Context } from '../core/context';
 
-const SENZOR_BULL_PATCHED = Symbol.for('senzor.bullmq.patched');
+const SENZOR_BULL_PATCHED =
+  Symbol.for('senzor.bullmq.patched');
 
-function getTargets(exports: any) {
+function getTargets(
+  exports: any
+) {
+
   const targets = [];
 
   if (exports) {
@@ -16,47 +20,84 @@ function getTargets(exports: any) {
   }
 
   return targets;
+
 }
 
-export const instrumentBullMQ = (client: SenzorClient, debug: boolean) => {
+export const instrumentBullMQ = (
+  client: SenzorClient,
+  debug: boolean
+) => {
 
-  hookRequire('bullmq', (bullExports) => {
+  hookRequire(
+    'bullmq',
+    (bullExports) => {
 
-    for (const target of getTargets(bullExports)) {
-      patchWorker(target);
+      try {
+
+        for (const target of getTargets(bullExports)) {
+          patchWorker(target);
+        }
+
+      }
+      catch (err) {
+
+        if (debug) {
+
+          console.error(
+            '[Senzor] BullMQ instrumentation error:',
+            err
+          );
+
+        }
+
+      }
+
+    }
+  );
+
+  function patchWorker(
+    target: any
+  ) {
+
+    if (
+      !target ||
+      !target.Worker ||
+      !target.Worker.prototype
+    ) {
+      return;
     }
 
-  });
+    const proto =
+      target.Worker.prototype;
 
-  function patchWorker(target: any) {
+    const original =
+      proto.processJob;
 
-    try {
+    if (
+      typeof original !== 'function' ||
+      original[SENZOR_BULL_PATCHED]
+    ) {
+      return;
+    }
 
-      if (
-        !target ||
-        !target.Worker ||
-        !target.Worker.prototype ||
-        typeof target.Worker.prototype.processJob !== 'function'
+    proto.processJob =
+      async function (
+        job: any
       ) {
-        return;
-      }
 
-      const proto = target.Worker.prototype;
+        const queueDelay =
+          job.timestamp
+            ? Date.now() - job.timestamp
+            : 0;
 
-      if (proto.processJob[SENZOR_BULL_PATCHED]) {
-        return;
-      }
+        const currentAttempt =
+          (job.attemptsMade || 0) + 1;
 
-      const originalProcessJob = proto.processJob;
+        const maxAttempts =
+          job.opts?.attempts || 1;
 
-      proto.processJob = async function (job: any) {
-
-        const queueDelay = job.timestamp ? Date.now() - job.timestamp : 0;
-
-        // ORIGINAL LOGIC (unchanged)
-        const currentAttempt = (job.attemptsMade || 0) + 1;
-        const maxAttempts = job.opts?.attempts || 1;
-        const isFinalAttempt = currentAttempt >= maxAttempts;
+        const isFinalAttempt =
+          currentAttempt >= maxAttempts;
 
         const taskName =
           job.name === '__default__'
@@ -64,8 +105,11 @@ export const instrumentBullMQ = (client: SenzorClient, debug: boolean) => {
             : `${job.queueName}:${job.name}`;
 
         return client.startTask(
+
           taskName,
+
           'queue',
+
           {
             queueDelay,
             attempts: currentAttempt,
@@ -76,79 +120,85 @@ export const instrumentBullMQ = (client: SenzorClient, debug: boolean) => {
               maxAttempts
             }
           },
+
           async () => {
+
             try {
 
-              // ORIGINAL EXECUTION (unchanged)
-              const result = await originalProcessJob.apply(
-                this,
-                arguments as any
-              );
+              const result =
+                await original.apply(
+                  this,
+                  arguments as any
+                );
 
-              client.endTask('success');
+              client.endTask(
+                'success'
+              );
 
               return result;
 
-            } catch (error) {
+            }
+            catch (error) {
 
-              // ORIGINAL DLQ LOGIC (unchanged)
               try {
 
-                const context = Context.current();
+                const context =
+                  Context.current();
 
                 if (
                   context &&
                   context.contextType === 'task' &&
                   isFinalAttempt
                 ) {
-                  context.data.isDeadLetter = true;
+
+                  context.data.isDeadLetter =
+                    true;
+
                 }
 
-              } catch {
-                // never break job execution
               }
+              catch { }
 
-              // ORIGINAL ERROR CAPTURE (unchanged)
-              client.captureError(error, {
-                queueName: job.queueName,
-                jobId: job.id,
-                isDeadLetter: isFinalAttempt
-              });
+              client.captureError(
+                error,
+                {
+                  queueName:
+                    job.queueName,
+                  jobId:
+                    job.id,
+                  isDeadLetter:
+                    isFinalAttempt
+                }
+              );
 
-              client.endTask('failed');
+              client.endTask(
+                'failed'
+              );
 
               throw error;
 
             }
+
           }
+
         );
 
       };
 
-      Object.defineProperty(
-        proto.processJob,
-        SENZOR_BULL_PATCHED,
-        {
-          value: true,
-          enumerable: false
-        }
+    Object.defineProperty(
+      proto.processJob,
+      SENZOR_BULL_PATCHED,
+      {
+        value: true,
+        enumerable: false
+      }
+    );
+
+    if (debug) {
+
+      console.log(
+        '[Senzor] BullMQ instrumented'
       );
-
-      if (debug) {
-        console.log(
-          '[Senzor] BullMQ Worker successfully instrumented with DLQ tracking'
-        );
-      }
-
-    }
-    catch (err) {
-
-      if (debug) {
-        console.error(
-          '[Senzor] BullMQ patch error:',
-          err
-        );
-      }
 
     }
 
