@@ -3,12 +3,16 @@ import https from 'https';
 import { URL } from 'url';
 import { Context } from '../core/context';
 import { randomUUID } from 'crypto';
+import { generateTraceparent } from '../utils/traceContext';
 
 const shimmer = (module: any, methodName: string, wrapper: (original: Function) => Function) => {
   if (!module[methodName]) return;
   const original = module[methodName];
   module[methodName] = wrapper(original);
 };
+
+// 16-char hex for W3C standard spans
+const generateSpanId = () => randomUUID().replace(/-/g, '').slice(0, 16);
 
 // --- FETCH INSTRUMENTATION ---
 export const instrumentFetch = (ingestUrl: string, debug = false) => {
@@ -38,16 +42,14 @@ export const instrumentFetch = (ingestUrl: string, debug = false) => {
     const method = (init?.method || 'GET').toUpperCase();
     const startTime = performance.now() - trace.startTime;
     const spanStartAbs = performance.now();
-    const spanId = randomUUID();
+    const spanId = generateSpanId();
 
     let hostname = 'unknown';
     try { hostname = new URL(urlStr).hostname; } catch (e) { }
 
-    // Inject Headers
     const newInit = { ...init } as RequestInit;
     if (!newInit.headers) newInit.headers = {};
 
-    // Helper to set header on various types
     const setHeader = (key: string, value: string) => {
       if (newInit.headers instanceof Headers) {
         newInit.headers.set(key, value);
@@ -58,35 +60,21 @@ export const instrumentFetch = (ingestUrl: string, debug = false) => {
       }
     };
 
+    // W3C Trace Context Injection
+    setHeader('traceparent', generateTraceparent(trace.id, spanId));
+
+    // Legacy fallback for older Senzor services
     setHeader('x-senzor-trace-id', trace.id);
     setHeader('x-senzor-parent-span-id', spanId);
 
     try {
       const response = await originalFetch(input, newInit);
-
       const duration = performance.now() - spanStartAbs;
-      Context.addSpan({
-        spanId,
-        name: `${method} ${hostname}`,
-        type: 'http',
-        startTime,
-        duration,
-        status: response.status,
-        meta: { url: urlStr, method, library: 'fetch' }
-      });
-
+      Context.addSpan({ spanId, name: `${method} ${hostname}`, type: 'http', startTime, duration, status: response.status, meta: { url: urlStr, method, library: 'fetch' } });
       return response;
     } catch (err: any) {
       const duration = performance.now() - spanStartAbs;
-      Context.addSpan({
-        spanId,
-        name: `${method} ${hostname}`,
-        type: 'http',
-        startTime,
-        duration,
-        status: 500,
-        meta: { error: err.message, url: urlStr, library: 'fetch' }
-      });
+      Context.addSpan({ spanId, name: `${method} ${hostname}`, type: 'http', startTime, duration, status: 500, meta: { error: err.message, url: urlStr, library: 'fetch' } });
       throw err;
     }
   };
@@ -103,7 +91,6 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
       let urlStr = '';
       let optionsIndex = 0;
 
-      // Parsing Logic: http.request(url, options, cb) OR http.request(options, cb)
       if (typeof args[0] === 'string' || args[0] instanceof URL) {
         urlStr = args[0].toString();
         optionsIndex = 1;
@@ -111,13 +98,11 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
         optionsIndex = 0;
       }
 
-      // Ensure options object exists at correct index
       if (!args[optionsIndex] || typeof args[optionsIndex] !== 'object') {
         args[optionsIndex] = {};
       }
       options = args[optionsIndex];
 
-      // Construct URL if missing
       if (!urlStr) {
         const protocol = options.protocol || (options.port === 443 ? 'https:' : 'http:');
         const host = options.hostname || options.host || 'localhost';
@@ -125,7 +110,6 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
         urlStr = `${protocol}//${host}${path}`;
       }
 
-      // Guard
       if (ingestHost && (urlStr.includes(ingestHost) || (options.hostname && options.hostname.includes(ingestHost)))) {
         return original.apply(this, args);
       }
@@ -136,33 +120,27 @@ export const instrumentHttp = (ingestUrl: string, debug = false) => {
       const method = (options.method || 'GET').toUpperCase();
       const startTime = performance.now() - trace.startTime;
       const spanStartAbs = performance.now();
-      const spanId = randomUUID();
+      const spanId = generateSpanId();
 
       let hostname = 'unknown';
       try { hostname = new URL(urlStr).hostname; } catch (e) { hostname = options.hostname || 'unknown'; }
 
-      // Inject Headers (Mutate the options object reference directly)
       if (!options.headers) options.headers = {};
+
+      // W3C Trace Context Injection
+      options.headers['traceparent'] = generateTraceparent(trace.id, spanId);
+
+      // Legacy fallback
       options.headers['x-senzor-trace-id'] = trace.id;
       options.headers['x-senzor-parent-span-id'] = spanId;
 
-      // Debug
-      if (debug) console.log(`[Senzor] Injecting headers to ${urlStr}`);
+      if (debug) console.log(`[Senzor] Injecting W3C traceparent headers to ${urlStr}`);
 
-      // Call Original
       const req = original.apply(this, args);
 
       const captureSpan = (res: any, error?: Error) => {
         const duration = performance.now() - spanStartAbs;
-        Context.addSpan({
-          spanId,
-          name: `${method} ${hostname}`,
-          type: 'http',
-          startTime,
-          duration,
-          status: error ? 500 : res?.statusCode || 0,
-          meta: { url: urlStr, method, library: 'http' }
-        });
+        Context.addSpan({ spanId, name: `${method} ${hostname}`, type: 'http', startTime, duration, status: error ? 500 : res?.statusCode || 0, meta: { url: urlStr, method, library: 'http' } });
       };
 
       req.on('response', (res: any) => {

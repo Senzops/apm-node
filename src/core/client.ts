@@ -8,6 +8,9 @@ import { instrumentPg } from '../instrumentation/pg';
 import { instrumentBullMQ } from '../instrumentation/bullmq';
 import { instrumentNodeCron } from '../instrumentation/cron';
 import { SDK_META } from '../utils/sdkMeta';
+import { parseTraceparent } from '../utils/traceContext'; // NEW
+
+const generateW3CTraceId = () => randomUUID().replace(/-/g, '');
 
 export class SenzorClient {
   private transport: Transport | null = null;
@@ -185,8 +188,8 @@ export class SenzorClient {
   public startTrace<T>(data: Partial<ActiveTrace['data']> & { headers?: any }, next: () => T): T {
     if (!this.transport) return next();
 
-    let parentTraceId = undefined;
-    let parentSpanId = undefined;
+    let inheritedTraceId: string | undefined = undefined;
+    let inheritedParentSpanId: string | undefined = undefined;
 
     if (data.headers) {
       const getHeader = (key: string) => {
@@ -195,21 +198,33 @@ export class SenzorClient {
         return undefined;
       };
 
-      parentTraceId = getHeader('x-senzor-trace-id');
-      parentSpanId = getHeader('x-senzor-parent-span-id');
+      // 1. Prioritize standard W3C Context (e.g., from RUM Frontend)
+      const traceparent = getHeader('traceparent');
+      const parsedContext = parseTraceparent(traceparent);
 
-      if (Array.isArray(parentTraceId)) parentTraceId = parentTraceId[0];
-      if (Array.isArray(parentSpanId)) parentSpanId = parentSpanId[0];
+      if (parsedContext) {
+        inheritedTraceId = parsedContext.traceId;
+        inheritedParentSpanId = parsedContext.parentSpanId;
+      } else {
+        // 2. Fallback to legacy proprietary headers
+        const rawTrace = getHeader('x-senzor-trace-id');
+        const rawSpan = getHeader('x-senzor-parent-span-id');
+        inheritedTraceId = Array.isArray(rawTrace) ? rawTrace[0] : rawTrace;
+        inheritedParentSpanId = Array.isArray(rawSpan) ? rawSpan[0] : rawSpan;
+      }
     }
 
+    // Crucial: ADOPT the inherited traceId to perfectly link Frontend & Backend
+    const activeTraceId = inheritedTraceId || generateW3CTraceId();
+
     const trace: ActiveTrace = {
-      id: randomUUID(),
+      id: activeTraceId,
       contextType: 'apm', // Ensure we distinguish APM traces from Background Tasks
       startTime: performance.now(),
       data: {
         ...data,
-        parentTraceId,
-        parentSpanId
+        parentTraceId: inheritedTraceId,
+        parentSpanId: inheritedParentSpanId
       },
       spans: []
     };
@@ -337,7 +352,7 @@ export class SenzorClient {
   }
 
   public track(data: any) {
-    this.transport?.addTrace({ traceId: randomUUID(), ...data, spans: [], timestamp: new Date().toISOString() });
+    this.transport?.addTrace({ traceId: generateW3CTraceId(), ...data, spans: [], timestamp: new Date().toISOString() });
   }
 
   public startSpan(name: string, type: 'db' | 'http' | 'function' | 'custom' = 'custom') {
@@ -345,7 +360,8 @@ export class SenzorClient {
     if (!trace) return { end: () => { } };
     const startTime = performance.now() - trace.startTime;
     const spanStartAbs = performance.now();
-    const spanId = randomUUID();
+    // Use 16 char hex for span IDs for W3C compatibility
+    const spanId = randomUUID().replace(/-/g, '').slice(0, 16);
     return { end: (meta?: any, status?: number) => { Context.addSpan({ spanId, name, type, startTime, duration: performance.now() - spanStartAbs, status, meta }); } };
   }
 
