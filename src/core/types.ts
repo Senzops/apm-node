@@ -4,6 +4,7 @@ export interface SenzorOptions {
   batchSize?: number;
   flushInterval?: number;
   debug?: boolean;
+  autoLogs?: boolean;
 }
 
 export interface Span {
@@ -23,6 +24,17 @@ export interface SenzorError {
   traceId?: string; // Maps to APM traceId
   runId?: string;   // Maps to Task runId
   context?: any;
+  timestamp: string;
+}
+
+// NEW: Enterprise Log Payload
+export interface SenzorLog {
+  message: string;
+  level: 'info' | 'warn' | 'error' | 'debug' | 'fatal';
+  attributes: Record<string, any>;
+  traceId?: string; // Used if context is APM
+  runId?: string;   // Used if context is Task
+  spanId?: string;
   timestamp: string;
 }
 

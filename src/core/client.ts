@@ -1,6 +1,6 @@
 import { Transport } from './transport';
 import { Context } from './context';
-import { SenzorOptions, ActiveTrace, TaskRun } from './types';
+import { SenzorOptions, ActiveTrace, TaskRun, SenzorLog } from './types';
 import { randomUUID } from 'crypto';
 import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
 import { instrumentMongo } from '../instrumentation/mongo';
@@ -8,9 +8,22 @@ import { instrumentPg } from '../instrumentation/pg';
 import { instrumentBullMQ } from '../instrumentation/bullmq';
 import { instrumentNodeCron } from '../instrumentation/cron';
 import { SDK_META } from '../utils/sdkMeta';
-import { parseTraceparent } from '../utils/traceContext'; // NEW
+import { parseTraceparent } from '../utils/traceContext';
 
 const generateW3CTraceId = () => randomUUID().replace(/-/g, '');
+
+// Memory-safe JSON stringifier to handle cyclical objects 
+// (like Express 'req' objects) passed into console.log
+const safeStringify = (obj: any): string => {
+  const cache = new Set();
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (cache.has(value)) return '[Circular]';
+      cache.add(value);
+    }
+    return value;
+  });
+};
 
 export class SenzorClient {
   private transport: Transport | null = null;
@@ -30,19 +43,99 @@ export class SenzorClient {
 
     if (!this.isInstrumented) {
       this.setupGlobalErrorHandlers();
+      this.setupLogInterception(); // Fire up Auto Log Instrumentation
 
       try { instrumentHttp(endpoint, debug); } catch (e) { }
       try { instrumentFetch(endpoint, debug); } catch (e) { }
       try { instrumentMongo(debug); } catch (e) { }
       try { instrumentPg(); } catch (e) { }
 
-      // Task Integrations (NEW)
+      // Task Integrations 
       try { instrumentBullMQ(this, debug); } catch (e) { }
       try { instrumentNodeCron(this, debug); } catch (e) { }
 
       this.isInstrumented = true;
-      if (debug) console.log('[Senzor] Auto-instrumentation & Error Tracking enabled');
+      if (debug) console.log('[Senzor] Auto-instrumentation enabled');
     }
+  }
+
+  // --- Enterprise Auto-Log Interception ---
+  private setupLogInterception() {
+    if (this.options?.autoLogs === false) return; // Opt-out check
+
+    const levels = ['log', 'info', 'warn', 'error', 'debug'] as const;
+    const originalConsole = {
+      log: console.log,
+      info: console.info,
+      warn: console.warn,
+      error: console.error,
+      debug: console.debug
+    };
+
+    let isIntercepting = false; // Lock to prevent SDK internal logs from looping infinitely
+
+    levels.forEach(level => {
+      console[level] = (...args: any[]) => {
+        // Always execute original console so user's terminal isn't broken
+        originalConsole[level].apply(console, args);
+
+        if (isIntercepting || !this.transport) return;
+        isIntercepting = true;
+
+        try {
+          let message = '';
+          let attributes: Record<string, any> = {};
+
+          args.forEach(arg => {
+            if (typeof arg === 'string') {
+              message += (message ? ' ' : '') + arg;
+            } else if (arg instanceof Error) {
+              message += (message ? ' ' : '') + arg.message;
+              attributes.errorStack = arg.stack;
+              attributes.errorName = arg.name;
+            } else if (typeof arg === 'object' && arg !== null) {
+              try {
+                // New Relic Style Destructuring: Merge all object keys into `attributes`
+                const parsed = JSON.parse(safeStringify(arg));
+                attributes = { ...attributes, ...parsed };
+              } catch (e) {
+                attributes.unparseableObject = true;
+              }
+            } else {
+              message += (message ? ' ' : '') + String(arg);
+            }
+          });
+
+          // Fallback if the user purely logged an object without text e.g., console.log({ user: 123 })
+          if (!message && Object.keys(attributes).length > 0) {
+            message = 'Object Log';
+          }
+
+          // Attach to Active Context seamlessly (Works for BOTH APM and Tasks!)
+          const currentTrace = Context.current();
+          const logType = currentTrace?.contextType === 'task' ? 'task' : 'apm';
+
+          const logPayload: SenzorLog = {
+            message: message || 'Empty log',
+            level: level === 'log' ? 'info' : level, // Map generic log -> info
+            attributes,
+            timestamp: new Date().toISOString()
+          };
+
+          // Attach the specific contextual ID
+          if (currentTrace) {
+            if (logType === 'task') logPayload.runId = currentTrace.id;
+            else logPayload.traceId = currentTrace.id;
+          }
+
+          this.transport.addLog(logPayload, logType);
+        } catch (e) {
+          // Absolute failure isolation. Never crash host app during logging.
+        } finally {
+          isIntercepting = false; // Release lock
+        }
+      };
+    });
   }
 
   private setupGlobalErrorHandlers() {
@@ -97,21 +190,14 @@ export class SenzorClient {
         }
         const enrichedMeta = {
           ...meta,
-          runtime: {
-            name: 'node',
-            version: process.version
-          },
+          runtime: { name: 'node', version: process.version },
           process: getProcessContext(),
           memory: getMemoryContext(),
-          sdk: {
-            name: SDK_META.name,
-            version: SDK_META.version
-          }
+          sdk: { name: SDK_META.name, version: SDK_META.version }
         };
 
         this.captureError(parsedError, enrichedMeta);
       } catch (internalFailure) {
-        // NEVER allow SDK to crash host app
         try {
           if (this.options?.debug) {
             console.error('[Senzor] Error handler failure:', internalFailure);
@@ -120,69 +206,14 @@ export class SenzorClient {
       }
     };
 
-    process.on('uncaughtExceptionMonitor', (error) => {
-      safeCapture(error, {
-        type: 'uncaughtExceptionMonitor',
-        severity: 'fatal'
-      });
-    });
-
-    process.on('uncaughtException', (error) => {
-      safeCapture(error, {
-        type: 'uncaughtException',
-        severity: 'fatal'
-      });
-    });
-
-    process.on('unhandledRejection', (reason) => {
-      safeCapture(reason, {
-        type: 'unhandledRejection',
-        severity: 'error'
-      });
-    });
-
-    process.on('warning', (warning) => {
-      safeCapture(warning, {
-        type: 'processWarning',
-        severity: 'warning'
-      });
-    });
-
-    process.on('multipleResolves', (type, promise, reason) => {
-      safeCapture(reason || new Error('Multiple promise resolves'), {
-        type: 'multipleResolves',
-        resolveType: type,
-        severity: 'warning'
-      });
-    });
-
-    process.on('rejectionHandled', (promise) => {
-      if (this.options?.debug) {
-        try {
-          console.warn('[Senzor] rejectionHandled event detected');
-        } catch { }
-      }
-    });
-
-    process.on('SIGTERM', () => {
-      safeCapture(
-        new Error('Process received SIGTERM'),
-        {
-          type: 'processSignal',
-          signal: 'SIGTERM'
-        }
-      );
-    });
-
-    process.on('SIGINT', () => {
-      safeCapture(
-        new Error('Process received SIGINT'),
-        {
-          type: 'processSignal',
-          signal: 'SIGINT'
-        }
-      );
-    });
+    process.on('uncaughtExceptionMonitor', (error) => safeCapture(error, { type: 'uncaughtExceptionMonitor', severity: 'fatal' }));
+    process.on('uncaughtException', (error) => safeCapture(error, { type: 'uncaughtException', severity: 'fatal' }));
+    process.on('unhandledRejection', (reason) => safeCapture(reason, { type: 'unhandledRejection', severity: 'error' }));
+    process.on('warning', (warning) => safeCapture(warning, { type: 'processWarning', severity: 'warning' }));
+    process.on('multipleResolves', (type, promise, reason) => safeCapture(reason || new Error('Multiple promise resolves'), { type: 'multipleResolves', resolveType: type, severity: 'warning' }));
+    process.on('rejectionHandled', (promise) => { if (this.options?.debug) { try { console.warn('[Senzor] rejectionHandled event detected'); } catch { } } });
+    process.on('SIGTERM', () => safeCapture(new Error('Process received SIGTERM'), { type: 'processSignal', signal: 'SIGTERM' }));
+    process.on('SIGINT', () => safeCapture(new Error('Process received SIGINT'), { type: 'processSignal', signal: 'SIGINT' }));
   }
 
   public startTrace<T>(data: Partial<ActiveTrace['data']> & { headers?: any }, next: () => T): T {
@@ -198,7 +229,6 @@ export class SenzorClient {
         return undefined;
       };
 
-      // 1. Prioritize standard W3C Context (e.g., from RUM Frontend)
       const traceparent = getHeader('traceparent');
       const parsedContext = parseTraceparent(traceparent);
 
@@ -206,7 +236,6 @@ export class SenzorClient {
         inheritedTraceId = parsedContext.traceId;
         inheritedParentSpanId = parsedContext.parentSpanId;
       } else {
-        // 2. Fallback to legacy proprietary headers
         const rawTrace = getHeader('x-senzor-trace-id');
         const rawSpan = getHeader('x-senzor-parent-span-id');
         inheritedTraceId = Array.isArray(rawTrace) ? rawTrace[0] : rawTrace;
@@ -214,18 +243,13 @@ export class SenzorClient {
       }
     }
 
-    // Crucial: ADOPT the inherited traceId to perfectly link Frontend & Backend
     const activeTraceId = inheritedTraceId || generateW3CTraceId();
 
     const trace: ActiveTrace = {
       id: activeTraceId,
-      contextType: 'apm', // Ensure we distinguish APM traces from Background Tasks
+      contextType: 'apm',
       startTime: performance.now(),
-      data: {
-        ...data,
-        parentTraceId: inheritedTraceId,
-        parentSpanId: inheritedParentSpanId
-      },
+      data: { ...data, parentTraceId: inheritedTraceId, parentSpanId: inheritedParentSpanId },
       spans: []
     };
 
@@ -255,7 +279,6 @@ export class SenzorClient {
     const currentContext = Context.current();
     const triggerTraceId = currentContext?.contextType === 'apm' ? currentContext.id : undefined;
 
-    // Snapshot system resources before execution
     const startMemory = process.memoryUsage ? process.memoryUsage().heapUsed : 0;
     const startCpu = process.cpuUsage ? process.cpuUsage() : undefined;
 
@@ -275,14 +298,13 @@ export class SenzorClient {
     const task = Context.current();
     if (!task || task.contextType !== 'task' || !this.transport) return;
 
-    // Calculate resource deltas
     let resourceMetrics;
     if (process.memoryUsage && task.startMemory !== undefined && process.cpuUsage && task.startCpu) {
       const endMemory = process.memoryUsage().heapUsed;
       const cpuDelta = process.cpuUsage(task.startCpu);
 
       resourceMetrics = {
-        memoryDeltaBytes: endMemory - task.startMemory, // Can be negative if GC ran!
+        memoryDeltaBytes: endMemory - task.startMemory,
         cpuUserUs: cpuDelta.user,
         cpuSystemUs: cpuDelta.system
       };
@@ -295,7 +317,7 @@ export class SenzorClient {
       triggerTraceId: task.data.triggerTraceId,
       queueDelay: task.data.queueDelay,
       attempts: task.data.attempts,
-      isDeadLetter: task.data.isDeadLetter, // Extracted from options/metadata if provided
+      isDeadLetter: task.data.isDeadLetter,
       metadata: { ...task.data.metadata, ...extraMetadata },
       resourceMetrics,
       status,
@@ -323,7 +345,6 @@ export class SenzorClient {
     }) as unknown as T;
   }
 
-  // --- MODIFIED: Context-Aware Error Capture ---
   public captureError(error: unknown, context: any = {}) {
     if (!this.transport) return;
 
@@ -360,7 +381,6 @@ export class SenzorClient {
     if (!trace) return { end: () => { } };
     const startTime = performance.now() - trace.startTime;
     const spanStartAbs = performance.now();
-    // Use 16 char hex for span IDs for W3C compatibility
     const spanId = randomUUID().replace(/-/g, '').slice(0, 16);
     return { end: (meta?: any, status?: number) => { Context.addSpan({ spanId, name, type, startTime, duration: performance.now() - spanStartAbs, status, meta }); } };
   }
