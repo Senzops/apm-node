@@ -1,3 +1,11 @@
+# 1.1.18
+
+chore: introduce more robust ip extraction
+
+# 1.1.17
+
+feat: add logs monitoring
+
 # 1.1.16
 
 feat: support traceparent of RUM

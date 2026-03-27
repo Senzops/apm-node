@@ -1,5 +1,6 @@
 import { client } from '../core/client';
 import { SenzorOptions } from '../core/types';
+import { getClientIp } from '../utils/getClientIp';
 
 export const senzorPlugin = (fastify: any, options: SenzorOptions, done: Function) => {
   if (options && options.apiKey) {
@@ -10,7 +11,7 @@ export const senzorPlugin = (fastify: any, options: SenzorOptions, done: Functio
     client.startTrace({
       method: request.method,
       path: request.raw.url || request.url,
-      ip: request.ip,
+      ip: getClientIp(request),
       userAgent: request.headers['user-agent'],
       headers: request.headers // Pass headers
     }, () => next());

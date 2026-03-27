@@ -1,5 +1,6 @@
 import { client } from '../core/client';
 import { getRoute } from '../core/normalizer';
+import { getClientIp } from '../utils/getClientIp';
 
 type EventHandler = (event: any) => any;
 
@@ -11,7 +12,7 @@ export const wrapH3 = (handler: EventHandler) => {
     return client.startTrace({
       method: req.method || 'GET',
       path: path,
-      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
+      ip: getClientIp(req),
       userAgent: req.headers['user-agent'],
       headers: req.headers // Pass headers
     }, async () => {

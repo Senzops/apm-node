@@ -1,5 +1,6 @@
 import { client } from '../core/client';
 import { normalizePath } from '../core/normalizer';
+import { getClientIp } from '../utils/getClientIp';
 
 // --- App Router Wrapper ---
 export const wrapNextRoute = (handler: Function) => {
@@ -34,7 +35,7 @@ export const wrapNextRoute = (handler: Function) => {
       method,
       path: url.pathname,
       userAgent: ua,
-      ip: ip,
+      ip: ip || getClientIp(req),
       headers: headers // Pass extracted headers
     }, async () => {
       try {
@@ -61,7 +62,7 @@ export const wrapNextPages = (handler: Function) => {
       method: req.method || 'GET',
       path: path,
       userAgent: req.headers['user-agent'],
-      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
+      ip: getClientIp(req),
       headers: req.headers // Standard Node headers work fine
     }, async () => {
 

@@ -1,4 +1,5 @@
 import { client } from '../core/client';
+import { getClientIp } from '../utils/getClientIp';
 
 // 1. Request Handler (Place before routes)
 export const expressMiddleware = () => {
@@ -6,7 +7,7 @@ export const expressMiddleware = () => {
     client.startTrace({
       method: req.method,
       path: req.originalUrl || req.url,
-      ip: req.ip || req.socket?.remoteAddress,
+      ip: getClientIp(req),
       userAgent: req.headers['user-agent'],
       headers: req.headers
     }, () => {
