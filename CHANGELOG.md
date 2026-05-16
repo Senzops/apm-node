@@ -1,3 +1,7 @@
+# 1.2.1
+
+feat: more enriched spans
+
 # 1.2.0
 
 feat: enhance package to be like OTEL
