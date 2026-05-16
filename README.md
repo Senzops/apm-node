@@ -230,6 +230,11 @@ Auto-instrumented task integrations:
 | `captureHeaders` | `boolean` | `false` | Capture sanitized request headers in trace metadata. |
 | `captureDbStatement` | `boolean` | SDK sanitizes SQL by default | Controls how much SQL statement text is retained. |
 | `instrumentations` | `boolean \| string[]` | `true` | Disable all instrumentation with `false`, or enable only named integrations. |
+| `frameworkSpans` | `boolean` | `true` | Capture framework middleware, router, handler, and lifecycle spans. |
+| `captureMiddlewareSpans` | `boolean` | `true` | Capture middleware spans for supported frameworks. |
+| `captureRouterSpans` | `boolean` | `true` | Capture router/route-dispatch spans. |
+| `captureLifecycleHookSpans` | `boolean` | `true` | Capture lifecycle hook spans such as Fastify hooks. |
+| `ignoreFrameworkSpanTypes` | `string[]` | `[]` | Skip selected framework span types such as `middleware` or `router`. |
 | `autoLogs` | `boolean` | `true` | Capture console logs and correlate them with active traces or tasks. |
 | `debug` | `boolean` | `false` | Print SDK diagnostics. |
 
@@ -238,6 +243,9 @@ Named instrumentation values include:
 ```ts
 [
   'http',
+  'express',
+  'fastify',
+  'koa',
   'fetch',
   'undici',
   'mongo',
@@ -270,6 +278,10 @@ The preload entrypoint reads these environment variables:
 | `SENZOR_MAX_SPANS_PER_TRACE` | Maximum spans retained per trace. |
 | `SENZOR_CAPTURE_HEADERS` | Set to `true` to capture sanitized headers. |
 | `SENZOR_CAPTURE_DB_STATEMENT` | Set to `false` for more restrictive SQL metadata. |
+| `SENZOR_FRAMEWORK_SPANS` | Set to `false` to disable framework execution spans. |
+| `SENZOR_CAPTURE_MIDDLEWARE_SPANS` | Set to `false` to disable middleware spans. |
+| `SENZOR_CAPTURE_ROUTER_SPANS` | Set to `false` to disable router spans. |
+| `SENZOR_CAPTURE_LIFECYCLE_HOOK_SPANS` | Set to `false` to disable lifecycle hook spans. |
 
 ## Ingestion Payload Shape
 

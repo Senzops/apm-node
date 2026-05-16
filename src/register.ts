@@ -32,6 +32,22 @@ const options = {
   captureDbStatement:
     process.env.SENZOR_CAPTURE_DB_STATEMENT === 'false'
       ? false
+      : undefined,
+  frameworkSpans:
+    process.env.SENZOR_FRAMEWORK_SPANS === 'false'
+      ? false
+      : undefined,
+  captureMiddlewareSpans:
+    process.env.SENZOR_CAPTURE_MIDDLEWARE_SPANS === 'false'
+      ? false
+      : undefined,
+  captureRouterSpans:
+    process.env.SENZOR_CAPTURE_ROUTER_SPANS === 'false'
+      ? false
+      : undefined,
+  captureLifecycleHookSpans:
+    process.env.SENZOR_CAPTURE_LIFECYCLE_HOOK_SPANS === 'false'
+      ? false
       : undefined
 };
 

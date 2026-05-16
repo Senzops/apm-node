@@ -1,11 +1,14 @@
 import { client } from '../core/client';
 import { SenzorOptions } from '../core/types';
+import { instrumentFastifyInstance } from '../instrumentation/fastify';
 import { getClientIp } from '../utils/getClientIp';
 
 export const senzorPlugin = (fastify: any, options: SenzorOptions, done: Function) => {
   if (options && options.apiKey) {
     client.init(options);
   }
+
+  instrumentFastifyInstance(fastify, options);
 
   fastify.addHook('onRequest', (request: any, reply: any, next: Function) => {
     client.startTrace({

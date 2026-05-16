@@ -7,7 +7,7 @@ const SENZOR_HOOKS =
   Symbol.for('senzor.require.hooks');
 
 type HookFn =
-  (exports: unknown) => void;
+  (exports: unknown) => unknown | void;
 
 type HookMap =
   Map<string, HookFn[]>;
@@ -48,17 +48,26 @@ function runHooks(
       HookMap
     >)[SENZOR_HOOKS];
 
-  if (!registry) return;
+  if (!registry) return exports;
 
   const hooks =
     registry.get(moduleName);
 
-  if (!hooks?.length) return;
+  if (!hooks?.length) return exports;
+
+  let currentExports =
+    exports;
 
   for (const hook of hooks) {
 
     try {
-      hook(exports);
+      const nextExports =
+        hook(currentExports);
+
+      if (nextExports !== undefined) {
+        currentExports =
+          nextExports;
+      }
     }
     catch (err) {
 
@@ -70,6 +79,8 @@ function runHooks(
     }
 
   }
+
+  return currentExports;
 
 }
 
@@ -98,12 +109,13 @@ function patchLoaderOnce() {
           arguments
         );
 
-      runHooks(
+      const patchedExports =
+        runHooks(
         request,
         exports
       );
 
-      return exports;
+      return patchedExports;
 
     };
 
@@ -137,9 +149,15 @@ function patchCached(
 
     if (cached?.exports) {
 
-      hook(
+      const replacement =
+        hook(
         cached.exports
       );
+
+      if (replacement !== undefined) {
+        cached.exports =
+          replacement;
+      }
 
     }
 

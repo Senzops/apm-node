@@ -3,6 +3,9 @@ import { Context } from './context';
 import { SenzorOptions, ActiveTrace, TaskRun, SenzorLog } from './types';
 import { randomUUID } from 'crypto';
 import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
+import { instrumentExpress } from '../instrumentation/express';
+import { instrumentFastify } from '../instrumentation/fastify';
+import { instrumentKoa } from '../instrumentation/koa';
 import { instrumentMongo } from '../instrumentation/mongo';
 import { instrumentPg } from '../instrumentation/pg';
 import { instrumentUndici } from '../instrumentation/undici';
@@ -74,6 +77,9 @@ export class SenzorClient {
       this.setupLogInterception(); // Fire up Auto Log Instrumentation
 
       try { if (this.isInstrumentationEnabled('http')) instrumentHttp(this, endpoint, this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('express')) instrumentExpress(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('fastify')) instrumentFastify(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('koa')) instrumentKoa(this.options || undefined); } catch (e) { }
       try { if (this.isInstrumentationEnabled('fetch')) instrumentFetch(endpoint, this.options || undefined); } catch (e) { }
       try { if (this.isInstrumentationEnabled('undici')) instrumentUndici(this.options || undefined); } catch (e) { }
       try { if (this.isInstrumentationEnabled('mongo')) instrumentMongo(this.options || undefined); } catch (e) { }

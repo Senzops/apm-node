@@ -1,5 +1,6 @@
 import { client } from '../core/client';
 import { normalizePath } from '../core/normalizer';
+import { invokeWithFrameworkSpan } from '../instrumentation/framework';
 import { getClientIp } from '../utils/getClientIp';
 
 // --- App Router Wrapper ---
@@ -39,10 +40,33 @@ export const wrapNextRoute = (handler: Function) => {
       headers: headers // Pass extracted headers
     }, async () => {
       try {
-        const response = await handler(req, context);
+        const route = normalizePath(url.pathname);
+        const response = await invokeWithFrameworkSpan(
+          handler,
+          undefined,
+          [req, context],
+          {
+            framework: 'next',
+            type: 'route_handler',
+            name: `next.app_route_handler ${method} ${route}`,
+            route,
+            method,
+            request: req,
+            attributes: {
+              'next.router': 'app',
+              'http.route': route,
+              'url.path': url.pathname
+            }
+          },
+          undefined,
+          {
+            callbackCompletesSpan: false,
+            responseEndsSpan: false
+          }
+        );
         const status = response?.status || 200;
 
-        client.endTrace(status, { route: normalizePath(url.pathname) });
+        client.endTrace(status, { route });
         return response;
       } catch (err: any) {
         client.captureError(err);
@@ -74,7 +98,30 @@ export const wrapNextPages = (handler: Function) => {
       res.once('close', done);
 
       try {
-        return await handler(req, res);
+        const route = normalizePath(path);
+        return await invokeWithFrameworkSpan(
+          handler,
+          undefined,
+          [req, res],
+          {
+            framework: 'next',
+            type: 'route_handler',
+            name: `next.pages_api_handler ${req.method || 'GET'} ${route}`,
+            route,
+            method: req.method || 'GET',
+            request: req,
+            response: res,
+            attributes: {
+              'next.router': 'pages',
+              'http.route': route
+            }
+          },
+          undefined,
+          {
+            callbackCompletesSpan: false,
+            responseEndsSpan: true
+          }
+        );
       } catch (e: any) {
         client.captureError(e);
         throw e;

@@ -82,6 +82,10 @@ Senzor.init({
   maxAttributes: 64,
   captureHeaders: false,
   captureDbStatement: true,
+  frameworkSpans: true,
+  captureMiddlewareSpans: true,
+  captureRouterSpans: true,
+  captureLifecycleHookSpans: true,
   autoLogs: true,
   debug: false
 });
@@ -133,6 +137,10 @@ SENZOR_MAX_QUEUE_SIZE=10000
 SENZOR_MAX_SPANS_PER_TRACE=500
 SENZOR_CAPTURE_HEADERS=false
 SENZOR_CAPTURE_DB_STATEMENT=true
+SENZOR_FRAMEWORK_SPANS=true
+SENZOR_CAPTURE_MIDDLEWARE_SPANS=true
+SENZOR_CAPTURE_ROUTER_SPANS=true
+SENZOR_CAPTURE_LIFECYCLE_HOOK_SPANS=true
 SENZOR_AUTO_LOGS=true
 SENZOR_DEBUG=false
 ```

@@ -11,6 +11,11 @@ export interface SenzorOptions {
   captureHeaders?: boolean;
   captureDbStatement?: boolean;
   instrumentations?: boolean | string[];
+  frameworkSpans?: boolean;
+  captureMiddlewareSpans?: boolean;
+  captureRouterSpans?: boolean;
+  captureLifecycleHookSpans?: boolean;
+  ignoreFrameworkSpanTypes?: string[];
   debug?: boolean;
   autoLogs?: boolean;
 }
