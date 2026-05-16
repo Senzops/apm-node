@@ -1,3 +1,7 @@
+# 1.2.0
+
+feat: enhance package to be like OTEL
+
 # 1.1.18
 
 chore: introduce more robust ip extraction
