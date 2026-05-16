@@ -1,3 +1,7 @@
+# 1.2.2
+
+fix: resolve ESM compatibility in hookRequire for framework span capture
+
 # 1.2.1
 
 feat: more enriched spans
