@@ -5,12 +5,17 @@ import { randomUUID } from 'crypto';
 import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
 import { instrumentMongo } from '../instrumentation/mongo';
 import { instrumentPg } from '../instrumentation/pg';
+import { instrumentUndici } from '../instrumentation/undici';
+import { instrumentRedis } from '../instrumentation/redis';
+import { instrumentMysql } from '../instrumentation/mysql';
+import { instrumentMongoose } from '../instrumentation/mongoose';
 import { instrumentBullMQ } from '../instrumentation/bullmq';
 import { instrumentNodeCron } from '../instrumentation/cron';
 import { SDK_META } from '../utils/sdkMeta';
 import { parseTraceparent } from '../utils/traceContext';
-
-const generateW3CTraceId = () => randomUUID().replace(/-/g, '');
+import { generateSpanId, generateTraceId } from '../utils/ids';
+import { sanitizeAttributes } from './sanitizer';
+import { startCapturedSpan } from '../instrumentation/span';
 
 // Memory-safe JSON stringifier to handle cyclical objects 
 // (like Express 'req' objects) passed into console.log
@@ -30,6 +35,19 @@ export class SenzorClient {
   private options: SenzorOptions | null = null;
   private isInstrumented = false;
 
+  public preload(options: Partial<SenzorOptions> = {}) {
+    const endpoint = options.endpoint || 'https://api.senzor.dev/api/ingest/apm';
+    const debug = options.debug || false;
+
+    this.options = {
+      apiKey: '',
+      ...this.options,
+      ...options
+    };
+
+    this.installNativeInstrumentations(endpoint, debug);
+  }
+
   public init(options: SenzorOptions) {
     if (!options.apiKey) {
       console.warn('[Senzor] API Key missing. SDK disabled.');
@@ -40,19 +58,33 @@ export class SenzorClient {
     const debug = options.debug || false;
 
     this.transport = new Transport({ ...options, endpoint });
+    this.installNativeInstrumentations(endpoint, debug);
+  }
 
+  private isInstrumentationEnabled(name: string): boolean {
+    const setting = this.options?.instrumentations;
+    if (setting === false) return false;
+    if (Array.isArray(setting)) return setting.includes(name);
+    return true;
+  }
+
+  private installNativeInstrumentations(endpoint: string, debug: boolean) {
     if (!this.isInstrumented) {
       this.setupGlobalErrorHandlers();
       this.setupLogInterception(); // Fire up Auto Log Instrumentation
 
-      try { instrumentHttp(endpoint, debug); } catch (e) { }
-      try { instrumentFetch(endpoint, debug); } catch (e) { }
-      try { instrumentMongo(debug); } catch (e) { }
-      try { instrumentPg(); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('http')) instrumentHttp(this, endpoint, this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('fetch')) instrumentFetch(endpoint, this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('undici')) instrumentUndici(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('mongo')) instrumentMongo(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('mongoose')) instrumentMongoose(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('pg')) instrumentPg(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('mysql')) instrumentMysql(this.options || undefined); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('redis')) instrumentRedis(this.options || undefined); } catch (e) { }
 
       // Task Integrations 
-      try { instrumentBullMQ(this, debug); } catch (e) { }
-      try { instrumentNodeCron(this, debug); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('bullmq')) instrumentBullMQ(this, debug); } catch (e) { }
+      try { if (this.isInstrumentationEnabled('cron')) instrumentNodeCron(this, debug); } catch (e) { }
 
       this.isInstrumented = true;
       if (debug) console.log('[Senzor] Auto-instrumentation enabled');
@@ -97,7 +129,7 @@ export class SenzorClient {
               try {
                 // New Relic Style Destructuring: Merge all object keys into `attributes`
                 const parsed = JSON.parse(safeStringify(arg));
-                attributes = { ...attributes, ...parsed };
+                attributes = { ...attributes, ...sanitizeAttributes(parsed, this.options || undefined) };
               } catch (e) {
                 attributes.unparseableObject = true;
               }
@@ -219,6 +251,15 @@ export class SenzorClient {
   public startTrace<T>(data: Partial<ActiveTrace['data']> & { headers?: any }, next: () => T): T {
     if (!this.transport) return next();
 
+    const existingTrace = Context.current();
+    if (existingTrace?.contextType === 'apm') {
+      existingTrace.data = {
+        ...existingTrace.data,
+        ...data
+      };
+      return next();
+    }
+
     let inheritedTraceId: string | undefined = undefined;
     let inheritedParentSpanId: string | undefined = undefined;
 
@@ -243,14 +284,19 @@ export class SenzorClient {
       }
     }
 
-    const activeTraceId = inheritedTraceId || generateW3CTraceId();
+    const activeTraceId = inheritedTraceId || generateTraceId();
+    const rootSpanId = generateSpanId();
 
     const trace: ActiveTrace = {
       id: activeTraceId,
       contextType: 'apm',
       startTime: performance.now(),
-      data: { ...data, parentTraceId: inheritedTraceId, parentSpanId: inheritedParentSpanId },
-      spans: []
+      rootSpanId,
+      activeSpanId: rootSpanId,
+      data: { ...data, parentTraceId: inheritedTraceId, parentSpanId: inheritedParentSpanId, rootSpanId },
+      spans: [],
+      maxSpans: this.options?.maxSpansPerTrace ?? 500,
+      droppedSpans: 0
     };
 
     return Context.run(trace, next);
@@ -259,15 +305,22 @@ export class SenzorClient {
   public endTrace(status: number, extraData: any = {}) {
     const trace = Context.current();
     if (!trace || trace.contextType !== 'apm' || !this.transport) return;
+    if (trace.ended) return;
+    trace.ended = true;
     const duration = performance.now() - trace.startTime;
 
     const payload = {
       traceId: trace.id,
       parentTraceId: trace.data.parentTraceId,
       parentSpanId: trace.data.parentSpanId,
+      rootSpanId: trace.rootSpanId,
       ...trace.data,
       ...extraData,
-      status, duration, spans: trace.spans, timestamp: new Date().toISOString()
+      status,
+      duration,
+      spans: trace.spans,
+      droppedSpans: trace.droppedSpans,
+      timestamp: new Date().toISOString()
     };
     this.transport.addTrace(payload);
   }
@@ -286,11 +339,15 @@ export class SenzorClient {
       id: randomUUID(),
       contextType: 'task',
       startTime: performance.now(),
+      rootSpanId: generateSpanId(),
       startMemory,
       startCpu,
       data: { taskName: name, taskType: type, triggerTraceId, ...options },
-      spans: []
+      spans: [],
+      maxSpans: this.options?.maxSpansPerTrace ?? 500,
+      droppedSpans: 0
     };
+    task.activeSpanId = task.rootSpanId;
     return Context.run(task, next);
   }
 
@@ -318,7 +375,7 @@ export class SenzorClient {
       queueDelay: task.data.queueDelay,
       attempts: task.data.attempts,
       isDeadLetter: task.data.isDeadLetter,
-      metadata: { ...task.data.metadata, ...extraMetadata },
+      metadata: { ...task.data.metadata, ...extraMetadata, droppedSpans: task.droppedSpans },
       resourceMetrics,
       status,
       duration: performance.now() - task.startTime,
@@ -361,7 +418,7 @@ export class SenzorClient {
       errorClass: parsedError.name || 'Error',
       message: parsedError.message,
       stackTrace: parsedError.stack,
-      context,
+      context: sanitizeAttributes(context, this.options || undefined),
       timestamp: new Date().toISOString()
     };
 
@@ -373,16 +430,13 @@ export class SenzorClient {
   }
 
   public track(data: any) {
-    this.transport?.addTrace({ traceId: generateW3CTraceId(), ...data, spans: [], timestamp: new Date().toISOString() });
+    this.transport?.addTrace({ traceId: generateTraceId(), ...data, spans: [], timestamp: new Date().toISOString() });
   }
 
   public startSpan(name: string, type: 'db' | 'http' | 'function' | 'custom' = 'custom') {
-    const trace = Context.current();
-    if (!trace) return { end: () => { } };
-    const startTime = performance.now() - trace.startTime;
-    const spanStartAbs = performance.now();
-    const spanId = randomUUID().replace(/-/g, '').slice(0, 16);
-    return { end: (meta?: any, status?: number) => { Context.addSpan({ spanId, name, type, startTime, duration: performance.now() - spanStartAbs, status, meta }); } };
+    const span = startCapturedSpan(name, type, {}, this.options || undefined);
+    if (!span) return { end: () => { } };
+    return { end: (meta?: any, status?: number) => span.end(status, meta) };
   }
 
   public async flush() { if (this.transport) await this.transport.flush(); }

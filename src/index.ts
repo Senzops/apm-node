@@ -6,6 +6,7 @@ import { senzorPlugin } from './wrappers/fastify';
 import { SenzorOptions } from './core/types';
 
 const Senzor = {
+  preload: (options: Partial<SenzorOptions> = {}) => client.preload(options),
   init: (options: SenzorOptions) => client.init(options),
   flush: () => client.flush(),
   track: client.track.bind(client),

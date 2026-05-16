@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import { ActiveTrace } from './types';
+import { ActiveTrace, Span } from './types';
 
 export const storage = new AsyncLocalStorage<ActiveTrace>();
 
@@ -8,14 +8,41 @@ export const Context = {
     return storage.run(trace, fn);
   },
 
+  withActiveSpan: <T>(spanId: string, fn: () => T): T => {
+    const store = storage.getStore();
+    if (!store) return fn();
+
+    return storage.run(
+      {
+        ...store,
+        activeSpanId: spanId,
+        data: store.data,
+        spans: store.spans
+      },
+      fn
+    );
+  },
+
   current: (): ActiveTrace | undefined => {
     return storage.getStore();
   },
 
-  addSpan: (span: any) => {
+  addSpan: (span: Span) => {
     const store = storage.getStore();
     if (store) {
-      store.spans.push(span);
+      Context.addSpanToTrace(store, span);
     }
+  },
+
+  addSpanToTrace: (trace: ActiveTrace, span: Span) => {
+    if (trace.ended) return;
+
+    const maxSpans = trace.maxSpans ?? 500;
+    if (trace.spans.length >= maxSpans) {
+      trace.droppedSpans = (trace.droppedSpans ?? 0) + 1;
+      return;
+    }
+
+    trace.spans.push(span);
   }
 };

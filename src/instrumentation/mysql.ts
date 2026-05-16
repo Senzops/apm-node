@@ -7,33 +7,34 @@ import { runWithCapturedSpan, startCapturedSpan } from './span';
 const extractSql = (args: any[]): string | undefined => {
   const first = args[0];
   if (typeof first === 'string') return first;
-  if (first && typeof first.text === 'string') return first.text;
+  if (first && typeof first.sql === 'string') return first.sql;
   return undefined;
 };
 
-const wrapQueryMethod = (
+const patchSqlMethod = (
   proto: any,
-  label: string,
+  method: 'query' | 'execute',
+  library: string,
   options?: SenzorOptions
 ) => {
   patchMethod(
     proto,
-    'query',
-    `senzor.pg.${label}.query`,
+    method,
+    `senzor.${library}.${method}`,
     (original) =>
-      function patchedPgQuery(this: any, ...args: any[]) {
+      function patchedMysqlMethod(this: any, ...args: any[]) {
         const sql = extractSql(args);
-        const operation = getSqlOperation(sql) || 'QUERY';
+        const operation = getSqlOperation(sql) || method.toUpperCase();
         const span = startCapturedSpan(
-          `Postgres ${operation}`,
+          `MySQL ${operation}`,
           'db',
           {
             query: normalizeSql(sql, options),
             operation,
-            'db.system.name': 'postgresql',
+            'db.system.name': 'mysql',
             'db.operation.name': operation,
             'db.query.text': normalizeSql(sql, options),
-            library: 'pg'
+            library
           },
           options
         );
@@ -43,21 +44,18 @@ const wrapQueryMethod = (
         const callbackIndex = args.findIndex(
           (arg) => typeof arg === 'function'
         );
-
         if (callbackIndex >= 0) {
           const originalCallback = args[callbackIndex];
-          args[callbackIndex] = function wrappedPgCallback(
+          args[callbackIndex] = function wrappedMysqlCallback(
             this: unknown,
-            err: Error | null,
-            result: any
+            err: any,
+            rows: any
           ) {
             span.end(err ? 500 : 0, {
               error: err?.message,
               'error.type': err?.name,
-              rowCount: result?.rowCount,
-              'db.response.row_count': result?.rowCount
+              rowCount: Array.isArray(rows) ? rows.length : undefined
             });
-
             return originalCallback.apply(this, arguments as any);
           };
         }
@@ -69,9 +67,9 @@ const wrapQueryMethod = (
             if (result && typeof result.then === 'function') {
               return result.then(
                 (value: any) => {
+                  const rows = Array.isArray(value) ? value[0] : value;
                   span.end(0, {
-                    rowCount: value?.rowCount,
-                    'db.response.row_count': value?.rowCount
+                    rowCount: Array.isArray(rows) ? rows.length : undefined
                   });
                   return value;
                 },
@@ -114,18 +112,58 @@ const wrapQueryMethod = (
   );
 };
 
-const patchPg = (pg: any, options?: SenzorOptions) => {
-  if (!pg) return;
-
-  wrapQueryMethod(pg.Client?.prototype, 'client', options);
-  wrapQueryMethod(pg.Pool?.prototype, 'pool', options);
-
-  if (pg.default) {
-    wrapQueryMethod(pg.default.Client?.prototype, 'default.client', options);
-    wrapQueryMethod(pg.default.Pool?.prototype, 'default.pool', options);
-  }
+const patchKnownPrototypes = (
+  mysql: any,
+  library: string,
+  options?: SenzorOptions
+) => {
+  [
+    mysql?.Connection?.prototype,
+    mysql?.Pool?.prototype,
+    mysql?.PoolConnection?.prototype,
+    mysql?.PromiseConnection?.prototype,
+    mysql?.PromisePool?.prototype,
+    mysql?.default?.Connection?.prototype,
+    mysql?.default?.Pool?.prototype
+  ].forEach((proto) => {
+    patchSqlMethod(proto, 'query', library, options);
+    patchSqlMethod(proto, 'execute', library, options);
+  });
 };
 
-export const instrumentPg = (options?: SenzorOptions) => {
-  hookRequire('pg', (exports: any) => patchPg(exports, options));
+const patchFactories = (
+  mysql: any,
+  library: string,
+  options?: SenzorOptions
+) => {
+  ['createConnection', 'createPool'].forEach((factory) => {
+    patchMethod(
+      mysql,
+      factory,
+      `senzor.${library}.${factory}`,
+      (original) =>
+        function patchedMysqlFactory(this: any, ...args: any[]) {
+          const client = original.apply(this, args);
+          patchSqlMethod(client, 'query', library, options);
+          patchSqlMethod(client, 'execute', library, options);
+          patchSqlMethod(Object.getPrototypeOf(client), 'query', library, options);
+          patchSqlMethod(Object.getPrototypeOf(client), 'execute', library, options);
+          return client;
+        }
+    );
+  });
+};
+
+const patchMysql = (
+  mysql: any,
+  library: string,
+  options?: SenzorOptions
+) => {
+  patchKnownPrototypes(mysql, library, options);
+  patchFactories(mysql, library, options);
+};
+
+export const instrumentMysql = (options?: SenzorOptions) => {
+  hookRequire('mysql', (exports: any) => patchMysql(exports, 'mysql', options));
+  hookRequire('mysql2', (exports: any) => patchMysql(exports, 'mysql2', options));
 };

@@ -1,105 +1,202 @@
-import { Context } from '../core/context';
+import { SenzorOptions } from '../core/types';
+import { hookRequire } from './hook';
+import { patchMethod } from './patch';
+import { runWithCapturedSpan, startCapturedSpan } from './span';
 
-export const instrumentMongo = (debug = false) => {
-  try {
-    const mongodb = require('mongodb');
-    const Collection = mongodb.Collection;
+const collectionName = (collection: any): string =>
+  collection?.collectionName ||
+  collection?.s?.namespace?.collection ||
+  collection?.namespace?.collection ||
+  'unknown';
 
-    // Attempt to get Cursor classes
-    // Note: The location of these classes varies by driver version, 
-    // checking common locations
-    const FindCursor = mongodb.FindCursor || require('mongodb/lib/cursor/find_cursor').FindCursor;
-    const AggregationCursor = mongodb.AggregationCursor || require('mongodb/lib/cursor/aggregation_cursor').AggregationCursor;
+const databaseName = (collection: any): string | undefined =>
+  collection?.dbName ||
+  collection?.s?.namespace?.db ||
+  collection?.namespace?.db;
 
-    if (debug) console.log('[Senzor] Instrumenting MongoDB (Collection + Cursors)...');
+const cursorCollectionName = (cursor: any): string =>
+  cursor?.namespace?.collection ||
+  cursor?.ns?.collection ||
+  cursor?.cursorNamespace?.collection ||
+  'unknown';
 
-    // --- Helper to Record Span ---
-    const recordSpan = (name: string, operation: string, collection: string, startAbs: number, traceStart: number, err?: Error) => {
-      const duration = performance.now() - startAbs;
-      Context.addSpan({
-        name: `MongoDB ${name}`,
-        type: 'db',
-        startTime: performance.now() - traceStart - duration, // Adjust start time to when op actually started
-        duration,
-        status: err ? 500 : 0,
-        meta: { collection, operation, error: err ? err.message : undefined }
-      });
-      if (debug) console.log(`[Senzor] Captured Mongo: ${name} (${duration.toFixed(2)}ms)`);
-    };
+const patchCollectionMethod = (
+  proto: any,
+  method: string,
+  options?: SenzorOptions
+) => {
+  patchMethod(
+    proto,
+    method,
+    `senzor.mongodb.collection.${method}`,
+    (original) =>
+      function patchedMongoCollection(this: any, ...args: any[]) {
+        const collection = collectionName(this);
+        const span = startCapturedSpan(
+          `MongoDB ${method}`,
+          'db',
+          {
+            collection,
+            operation: method,
+            'db.system.name': 'mongodb',
+            'db.collection.name': collection,
+            'db.namespace': databaseName(this)
+              ? `${databaseName(this)}.${collection}`
+              : collection,
+            'db.operation.name': method,
+            library: 'mongodb'
+          },
+          options
+        );
 
-    // --- 1. Instrument Immediate Operations (Insert/Update/Delete) ---
-    const immediateMethods = ['insertOne', 'insertMany', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany', 'countDocuments'];
+        if (!span) return original.apply(this, args);
 
-    immediateMethods.forEach((method) => {
-      if (!Collection.prototype[method]) return;
-      const original = Collection.prototype[method];
+        return runWithCapturedSpan(span, () => {
+          try {
+            const result = original.apply(this, args);
+            if (result && typeof result.then === 'function') {
+              return result.then(
+                (value: any) => {
+                  span.end(0, {
+                    matchedCount: value?.matchedCount,
+                    modifiedCount: value?.modifiedCount,
+                    deletedCount: value?.deletedCount,
+                    insertedCount: value?.insertedCount
+                  });
+                  return value;
+                },
+                (error: any) => {
+                  span.end(500, {
+                    error: error?.message,
+                    'error.type': error?.name || 'Error'
+                  });
+                  throw error;
+                }
+              );
+            }
 
-      Collection.prototype[method] = function (...args: any[]) {
-        const trace = Context.current();
-        if (!trace) return original.apply(this, args);
-
-        const spanStartAbs = performance.now();
-        const traceStart = trace.startTime;
-        const collName = this.collectionName;
-
-        try {
-          const result = original.apply(this, args);
-          if (result && typeof result.then === 'function') {
-            return result.then(
-              (res: any) => { recordSpan(method, method, collName, spanStartAbs, traceStart); return res; },
-              (err: any) => { recordSpan(method, method, collName, spanStartAbs, traceStart, err); throw err; }
-            );
+            span.end(0);
+            return result;
+          } catch (error: any) {
+            span.end(500, {
+              error: error?.message,
+              'error.type': error?.name || 'Error'
+            });
+            throw error;
           }
-          return result;
-        } catch (err: any) {
-          recordSpan(method, method, collName, spanStartAbs, traceStart, err);
-          throw err;
-        }
-      };
-    });
+        });
+      }
+  );
+};
 
-    // --- 2. Instrument Cursor Execution (find -> toArray) ---
-    const patchCursor = (CursorClass: any, label: string) => {
-      if (!CursorClass || !CursorClass.prototype.toArray) return;
+const patchCursorMethod = (
+  proto: any,
+  method: string,
+  operation: string,
+  options?: SenzorOptions
+) => {
+  patchMethod(
+    proto,
+    method,
+    `senzor.mongodb.cursor.${operation}.${method}`,
+    (original) =>
+      function patchedMongoCursor(this: any, ...args: any[]) {
+        const collection = cursorCollectionName(this);
+        const span = startCapturedSpan(
+          `MongoDB ${operation}`,
+          'db',
+          {
+            collection,
+            operation,
+            'db.system.name': 'mongodb',
+            'db.collection.name': collection,
+            'db.operation.name': operation,
+            library: 'mongodb'
+          },
+          options
+        );
 
-      const originalToArray = CursorClass.prototype.toArray;
+        if (!span) return original.apply(this, args);
 
-      CursorClass.prototype.toArray = function (...args: any[]) {
-        const trace = Context.current();
-        // Cursors are often created in context but executed later. 
-        // We check context at execution time.
-        if (!trace) return originalToArray.apply(this, args);
+        return runWithCapturedSpan(span, () => {
+          try {
+            const result = original.apply(this, args);
+            if (result && typeof result.then === 'function') {
+              return result.then(
+                (value: any) => {
+                  span.end(0, {
+                    resultCount: Array.isArray(value) ? value.length : undefined
+                  });
+                  return value;
+                },
+                (error: any) => {
+                  span.end(500, {
+                    error: error?.message,
+                    'error.type': error?.name || 'Error'
+                  });
+                  throw error;
+                }
+              );
+            }
 
-        const spanStartAbs = performance.now();
-        const traceStart = trace.startTime;
-        // Attempt to get collection name from cursor internal state
-        const collName = this.namespace?.collection || 'unknown';
-
-        const onSuccess = (res: any) => {
-          recordSpan(label, label, collName, spanStartAbs, traceStart);
-          return res;
-        };
-        const onError = (err: any) => {
-          recordSpan(label, label, collName, spanStartAbs, traceStart, err);
-          throw err;
-        };
-
-        try {
-          const result = originalToArray.apply(this, args);
-          if (result && typeof result.then === 'function') {
-            return result.then(onSuccess, onError);
+            span.end(0);
+            return result;
+          } catch (error: any) {
+            span.end(500, {
+              error: error?.message,
+              'error.type': error?.name || 'Error'
+            });
+            throw error;
           }
-          return onSuccess(result);
-        } catch (e) {
-          onError(e);
-        }
-      };
-    };
+        });
+      }
+  );
+};
 
-    patchCursor(FindCursor, 'find');
-    patchCursor(AggregationCursor, 'aggregate');
+const patchMongo = (mongodb: any, options?: SenzorOptions) => {
+  const Collection = mongodb?.Collection || mongodb?.default?.Collection;
+  const collectionProto = Collection?.prototype;
 
-  } catch (e: any) {
-    if (debug) console.warn('[Senzor] MongoDB instrumentation warning:', e.message);
-  }
+  [
+    'insertOne',
+    'insertMany',
+    'updateOne',
+    'updateMany',
+    'replaceOne',
+    'deleteOne',
+    'deleteMany',
+    'findOne',
+    'findOneAndUpdate',
+    'findOneAndDelete',
+    'findOneAndReplace',
+    'countDocuments',
+    'estimatedDocumentCount',
+    'distinct',
+    'bulkWrite',
+    'createIndex',
+    'dropIndex'
+  ].forEach((method) =>
+    patchCollectionMethod(collectionProto, method, options)
+  );
+
+  const FindCursor =
+    mongodb?.FindCursor || mongodb?.default?.FindCursor;
+  const AggregationCursor =
+    mongodb?.AggregationCursor || mongodb?.default?.AggregationCursor;
+
+  ['toArray', 'next', 'forEach'].forEach((method) =>
+    patchCursorMethod(FindCursor?.prototype, method, 'find', options)
+  );
+  ['toArray', 'next', 'forEach'].forEach((method) =>
+    patchCursorMethod(
+      AggregationCursor?.prototype,
+      method,
+      'aggregate',
+      options
+    )
+  );
+};
+
+export const instrumentMongo = (options?: SenzorOptions) => {
+  hookRequire('mongodb', (exports: any) => patchMongo(exports, options));
 };

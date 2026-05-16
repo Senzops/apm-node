@@ -4,13 +4,24 @@
   "description": "Universal APM SDK for Senzor",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    },
+    "./register": {
+      "types": "./dist/register.d.ts",
+      "require": "./dist/register.js",
+      "import": "./dist/register.mjs"
+    }
+  },
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm,iife --dts --clean --minify",
+    "build": "tsup",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {},
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.41",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"
   },

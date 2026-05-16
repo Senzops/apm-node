@@ -3,12 +3,21 @@ export interface SenzorOptions {
   endpoint?: string;
   batchSize?: number;
   flushInterval?: number;
+  flushTimeoutMs?: number;
+  maxQueueSize?: number;
+  maxSpansPerTrace?: number;
+  maxAttributeLength?: number;
+  maxAttributes?: number;
+  captureHeaders?: boolean;
+  captureDbStatement?: boolean;
+  instrumentations?: boolean | string[];
   debug?: boolean;
   autoLogs?: boolean;
 }
 
 export interface Span {
   spanId: string;
+  parentSpanId?: string;
   name: string;
   type: 'db' | 'http' | 'function' | 'custom';
   startTime: number;
@@ -80,8 +89,13 @@ export interface ActiveTrace {
   id: string; // The APM traceId OR the Task runId
   contextType: 'apm' | 'task';
   startTime: number;
+  rootSpanId?: string;
+  activeSpanId?: string;
   startMemory?: number; // Baseline heap
   startCpu?: NodeJS.CpuUsage; // Baseline CPU tick
   data: any; // Holds Partial<Trace> or Partial<TaskRun>
   spans: Span[];
+  maxSpans?: number;
+  droppedSpans?: number;
+  ended?: boolean;
 }
