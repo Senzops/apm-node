@@ -273,6 +273,16 @@ const patchRouteMethodHandlers = (
   }
 };
 
+const getSafeRouter = (app: any) => {
+  if (!app) return undefined;
+  if (app._router) return app._router;
+  try {
+    return app.router;
+  } catch {
+    return undefined;
+  }
+};
+
 const patchExpress = (
   expressModule: any,
   options?: SenzorOptions
@@ -320,9 +330,9 @@ const patchExpress = (
     'senzor.express.application.use',
     (original) =>
       function patchedExpressApplicationUse(this: any, ...args: any[]) {
-        const router = this?.router || this?._router;
+        const router = getSafeRouter(this);
         const result = original.apply(this, args);
-        const activeRouter = this?.router || this?._router || router;
+        const activeRouter = getSafeRouter(this) || router;
         const layer = activeRouter?.stack?.[activeRouter.stack.length - 1];
         patchLayer(layer, getLayerPath(args), options);
         return result;
