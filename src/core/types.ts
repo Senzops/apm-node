@@ -89,6 +89,12 @@ export interface TaskRun {
   timestamp: string;
 }
 
+// NEW: Shared mutable state for a trace/task to prevent duplication during context shallow copying
+export interface ActiveTraceState {
+  ended: boolean;
+  droppedSpans: number;
+}
+
 // Unified Context Payload for async_hooks
 export interface ActiveTrace {
   id: string; // The APM traceId OR the Task runId
@@ -101,6 +107,5 @@ export interface ActiveTrace {
   data: any; // Holds Partial<Trace> or Partial<TaskRun>
   spans: Span[];
   maxSpans?: number;
-  droppedSpans?: number;
-  ended?: boolean;
+  state: ActiveTraceState;
 }

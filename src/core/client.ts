@@ -259,10 +259,7 @@ export class SenzorClient {
 
     const existingTrace = Context.current();
     if (existingTrace?.contextType === 'apm') {
-      existingTrace.data = {
-        ...existingTrace.data,
-        ...data
-      };
+      Object.assign(existingTrace.data, data);
       return next();
     }
 
@@ -302,7 +299,10 @@ export class SenzorClient {
       data: { ...data, parentTraceId: inheritedTraceId, parentSpanId: inheritedParentSpanId, rootSpanId },
       spans: [],
       maxSpans: this.options?.maxSpansPerTrace ?? 500,
-      droppedSpans: 0
+      state: {
+        ended: false,
+        droppedSpans: 0
+      }
     };
 
     return Context.run(trace, next);
@@ -311,8 +311,8 @@ export class SenzorClient {
   public endTrace(status: number, extraData: any = {}) {
     const trace = Context.current();
     if (!trace || trace.contextType !== 'apm' || !this.transport) return;
-    if (trace.ended) return;
-    trace.ended = true;
+    if (trace.state.ended) return;
+    trace.state.ended = true;
     const duration = performance.now() - trace.startTime;
 
     const payload = {
@@ -325,7 +325,7 @@ export class SenzorClient {
       status,
       duration,
       spans: trace.spans,
-      droppedSpans: trace.droppedSpans,
+      droppedSpans: trace.state.droppedSpans,
       timestamp: new Date().toISOString()
     };
     this.transport.addTrace(payload);
@@ -351,7 +351,10 @@ export class SenzorClient {
       data: { taskName: name, taskType: type, triggerTraceId, ...options },
       spans: [],
       maxSpans: this.options?.maxSpansPerTrace ?? 500,
-      droppedSpans: 0
+      state: {
+        ended: false,
+        droppedSpans: 0
+      }
     };
     task.activeSpanId = task.rootSpanId;
     return Context.run(task, next);
@@ -360,6 +363,8 @@ export class SenzorClient {
   public endTask(status: 'success' | 'failed', extraMetadata: any = {}) {
     const task = Context.current();
     if (!task || task.contextType !== 'task' || !this.transport) return;
+    if (task.state.ended) return;
+    task.state.ended = true;
 
     let resourceMetrics;
     if (process.memoryUsage && task.startMemory !== undefined && process.cpuUsage && task.startCpu) {
@@ -381,7 +386,7 @@ export class SenzorClient {
       queueDelay: task.data.queueDelay,
       attempts: task.data.attempts,
       isDeadLetter: task.data.isDeadLetter,
-      metadata: { ...task.data.metadata, ...extraMetadata, droppedSpans: task.droppedSpans },
+      metadata: { ...task.data.metadata, ...extraMetadata, droppedSpans: task.state.droppedSpans },
       resourceMetrics,
       status,
       duration: performance.now() - task.startTime,

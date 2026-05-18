@@ -259,7 +259,7 @@ const patchIncomingServer = (
               finalized = true;
 
               setImmediate(() => {
-                if (trace.ended) return;
+                if (trace.state.ended) return;
 
                 Context.run(trace, () => {
                   client.endTrace(res.statusCode || 0, {

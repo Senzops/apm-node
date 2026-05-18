@@ -35,11 +35,11 @@ export const Context = {
   },
 
   addSpanToTrace: (trace: ActiveTrace, span: Span) => {
-    if (trace.ended) return;
+    if (trace.state.ended) return;
 
     const maxSpans = trace.maxSpans ?? 500;
     if (trace.spans.length >= maxSpans) {
-      trace.droppedSpans = (trace.droppedSpans ?? 0) + 1;
+      trace.state.droppedSpans = (trace.state.droppedSpans ?? 0) + 1;
       return;
     }
 
