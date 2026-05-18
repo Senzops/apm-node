@@ -57,18 +57,24 @@ const getRequestRoute = (
   layer: any,
   layerPath?: string
 ): string | undefined => {
-  const routePath = stringifyPath(layer?.route?.path);
-  if (routePath) {
+  if (layer?.route?.path) {
+    const routePath = stringifyPath(layer.route.path);
     const baseUrl = req?.baseUrl || '';
+    // If baseUrl already ends with or contains the routePath, be careful
     return `${baseUrl}${routePath}` || routePath;
   }
 
   if (req?.route?.path) {
-    return `${req.baseUrl || ''}${req.route.path}`;
+    const baseUrl = req?.baseUrl || '';
+    return `${baseUrl}${req.route.path}`;
   }
 
   if (layerPath) {
     const baseUrl = req?.baseUrl || '';
+    // If baseUrl already contains layerPath, don't double it
+    if (baseUrl === layerPath || baseUrl.endsWith(layerPath)) {
+      return baseUrl;
+    }
     return `${baseUrl}${layerPath}` || layerPath;
   }
 
@@ -84,9 +90,14 @@ const getLayerType = (
   if (forcedType) return forcedType;
   if (original.length === 4) return 'error_handler' as const;
   if (layer?.route) return 'request_handler' as const;
-  if (layer?.name === 'router' || layer?.handle?.stack || layer?.handle?.name === 'router') {
-    return 'router' as const;
-  }
+
+  const isRouter =
+    layer?.name === 'router' ||
+    layer?.handle?.name === 'router' ||
+    typeof layer?.handle?.stack !== 'undefined' ||
+    typeof layer?.handle?.route === 'function';
+
+  if (isRouter) return 'router' as const;
   return 'middleware' as const;
 };
 
@@ -105,6 +116,7 @@ const copyEnumerableProperties = (
   source: Function,
   target: Function
 ) => {
+  // Copy enumerable properties
   for (const key in source as any) {
     try {
       Object.defineProperty(target, key, {
@@ -117,6 +129,13 @@ const copyEnumerableProperties = (
           (source as any)[key] = value;
         }
       });
+    } catch { }
+  }
+
+  // Ensure 'stack' is copied even if not enumerable (though it usually is)
+  if ((source as any).stack && !(target as any).stack) {
+    try {
+      (target as any).stack = (source as any).stack;
     } catch { }
   }
 };
@@ -145,7 +164,7 @@ const patchLayer = (
       const handlerName =
         original.name ||
         layer.name ||
-        layerType;
+        (layerType === 'request_handler' ? 'handler' : layerType);
 
       if (original.length === 4) {
         const wrapped = function senzorExpressErrorHandler(
@@ -264,7 +283,7 @@ const patchRouteMethodHandlers = (
           const stack = this?.stack || [];
 
           for (const layer of stack) {
-          patchLayer(layer, routePath, options, 'request_handler');
+            patchLayer(layer, routePath, options, 'request_handler');
           }
 
           return result;
@@ -277,10 +296,13 @@ const getSafeRouter = (app: any) => {
   if (!app) return undefined;
   if (app._router) return app._router;
   try {
-    return app.router;
-  } catch {
-    return undefined;
-  }
+    // In Express 4, app.router is a getter that throws.
+    // We only want it if it's not a throwing getter (Express 3)
+    // or if it actually has a stack.
+    const r = app.router;
+    if (r && (r.stack || typeof r === 'function')) return r;
+  } catch { }
+  return undefined;
 };
 
 const patchExpress = (
@@ -290,7 +312,7 @@ const patchExpress = (
   if (!expressModule) return;
 
   const routerProto =
-    typeof expressModule?.Router?.prototype?.route === 'function'
+    typeof expressModule?.Router?.prototype?.use === 'function'
       ? expressModule.Router.prototype
       : expressModule.Router;
 
@@ -302,8 +324,9 @@ const patchExpress = (
       function patchedExpressRoute(this: any, ...args: any[]) {
         const route = original.apply(this, args);
         const routePath = getLayerPath(args);
-        const layer = this?.stack?.[this.stack.length - 1];
+        const stack = this?.stack || [];
 
+        const layer = stack[stack.length - 1];
         patchLayer(layer, routePath, options, 'router');
         patchRouteMethodHandlers(route, routePath, options);
 
@@ -317,9 +340,13 @@ const patchExpress = (
     'senzor.express.router.use',
     (original) =>
       function patchedExpressRouterUse(this: any, ...args: any[]) {
+        const prevStackLength = this?.stack?.length || 0;
         const result = original.apply(this, args);
-        const layer = this?.stack?.[this.stack.length - 1];
-        patchLayer(layer, getLayerPath(args), options);
+        const stack = this?.stack || [];
+
+        for (let i = prevStackLength; i < stack.length; i++) {
+          patchLayer(stack[i], getLayerPath(args), options);
+        }
         return result;
       }
   );
@@ -330,11 +357,17 @@ const patchExpress = (
     'senzor.express.application.use',
     (original) =>
       function patchedExpressApplicationUse(this: any, ...args: any[]) {
-        const router = getSafeRouter(this);
+        const routerBefore = getSafeRouter(this);
+        const prevStackLength = routerBefore?.stack?.length || 0;
+
         const result = original.apply(this, args);
-        const activeRouter = getSafeRouter(this) || router;
-        const layer = activeRouter?.stack?.[activeRouter.stack.length - 1];
-        patchLayer(layer, getLayerPath(args), options);
+
+        const routerAfter = getSafeRouter(this);
+        const stack = routerAfter?.stack || [];
+
+        for (let i = prevStackLength; i < stack.length; i++) {
+          patchLayer(stack[i], getLayerPath(args), options);
+        }
         return result;
       }
   );
