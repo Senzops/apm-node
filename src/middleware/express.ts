@@ -3,7 +3,7 @@ import { getClientIp } from '../utils/getClientIp';
 
 // 1. Request Handler (Place before routes)
 export const expressMiddleware = () => {
-  return (req: any, res: any, next: () => void) => {
+  return function senzorMiddleware(req: any, res: any, next: () => void) {
     client.startTrace({
       method: req.method,
       path: req.originalUrl || req.url,
@@ -37,7 +37,7 @@ export const expressMiddleware = () => {
 // 2. Error Handler (Place after routes)
 // This is required in Express to capture the actual Error Object (Stack Trace)
 export const expressErrorHandler = () => {
-  return (err: any, req: any, res: any, next: (err?: any) => void) => {
+  return function senzorErrorHandler(err: any, req: any, res: any, next: (err?: any) => void) {
 
     // 1. Capture the exception context
     client.captureError(err);

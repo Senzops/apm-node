@@ -51,6 +51,7 @@ export const wrapNextRoute = (handler: Function) => {
             name: `next.app_route_handler ${method} ${route}`,
             route,
             method,
+            handlerName: (handler as any).name || 'handler',
             request: req,
             attributes: {
               'next.router': 'app',
@@ -109,6 +110,7 @@ export const wrapNextPages = (handler: Function) => {
             name: `next.pages_api_handler ${req.method || 'GET'} ${route}`,
             route,
             method: req.method || 'GET',
+            handlerName: (handler as any).name || 'handler',
             request: req,
             response: res,
             attributes: {

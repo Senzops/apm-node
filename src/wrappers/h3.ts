@@ -29,6 +29,7 @@ export const wrapH3 = (handler: EventHandler) => {
             name: `h3.event_handler ${req.method || 'GET'} ${route}`,
             route,
             method: req.method || 'GET',
+            handlerName: (handler as any).name || 'handler',
             request: req,
             response: event.node.res,
             attributes: {
