@@ -1,7 +1,51 @@
-import { AsyncLocalStorage } from 'async_hooks';
 import { ActiveTrace, Span } from './types';
 
-export const storage = new AsyncLocalStorage<ActiveTrace>();
+interface IStorage<T> {
+  run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R;
+  getStore(): T | undefined;
+}
+
+class NaiveStorage<T> implements IStorage<T> {
+  private store: T | undefined;
+
+  run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R {
+    const prev = this.store;
+    this.store = store;
+    try {
+      return callback(...args);
+    } finally {
+      this.store = prev;
+    }
+  }
+
+  getStore(): T | undefined {
+    return this.store;
+  }
+}
+
+const resolveStorage = <T>(): IStorage<T> => {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).AsyncLocalStorage) {
+    return new (globalThis as any).AsyncLocalStorage();
+  }
+
+  try {
+    if (typeof require !== 'undefined') {
+      const { AsyncLocalStorage } = require('node:async_hooks');
+      if (AsyncLocalStorage) return new AsyncLocalStorage();
+    }
+  } catch {}
+
+  try {
+    if (typeof require !== 'undefined') {
+      const { AsyncLocalStorage } = require('async_hooks');
+      if (AsyncLocalStorage) return new AsyncLocalStorage();
+    }
+  } catch {}
+
+  return new NaiveStorage<T>();
+};
+
+export const storage = resolveStorage<ActiveTrace>();
 
 export const Context = {
   run: <T>(trace: ActiveTrace, fn: () => T): T => {

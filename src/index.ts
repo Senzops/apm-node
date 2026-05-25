@@ -2,6 +2,8 @@ import { client } from './core/client';
 import { expressMiddleware, expressErrorHandler } from './middleware/express';
 import { wrapH3 } from './wrappers/h3';
 import { wrapNextRoute, wrapNextPages } from './wrappers/next';
+import { wrapWorker } from './wrappers/worker';
+import { nitroPlugin } from './wrappers/nitro';
 import { senzorPlugin } from './wrappers/fastify';
 import { SenzorOptions } from './core/types';
 
@@ -13,7 +15,7 @@ const Senzor = {
   startSpan: client.startSpan.bind(client),
   captureException: client.captureError.bind(client),
 
-  // Task Monitoring (NEW)
+  // Task Monitoring
   wrapTask: client.wrapTask.bind(client),
   startTask: client.startTask.bind(client),
 
@@ -29,7 +31,13 @@ const Senzor = {
   wrapH3,
 
   // Fastify
-  fastifyPlugin: senzorPlugin
+  fastifyPlugin: senzorPlugin,
+
+  // Cloudflare Workers
+  worker: wrapWorker,
+
+  // Nitro / Nuxt
+  nitroPlugin
 };
 
 export default Senzor;

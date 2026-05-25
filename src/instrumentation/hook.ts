@@ -1,18 +1,20 @@
-import Module from 'module';
-
-const SENZOR_PATCHED = Symbol.for('senzor.require.patched');
-const SENZOR_HOOKS = Symbol.for('senzor.require.hooks');
-
 type HookFn = (exports: unknown) => unknown | void;
 type HookMap = Map<string, HookFn[]>;
 
-// Module.createRequire works in both CJS and ESM contexts,
-// unlike bare `require` which is unavailable in ESM builds.
-const safeRequire: NodeRequire = Module.createRequire(
-  typeof __filename !== 'undefined'
-    ? __filename
-    : process.cwd() + '/'
-);
+let Module: any;
+let safeRequire: NodeRequire;
+
+try {
+  Module = require('module');
+  safeRequire = Module.createRequire(
+    typeof __filename !== 'undefined'
+      ? __filename
+      : process.cwd() + '/'
+  );
+} catch {}
+
+const SENZOR_PATCHED = Symbol.for('senzor.require.patched');
+const SENZOR_HOOKS = Symbol.for('senzor.require.hooks');
 
 function getHookRegistry(): HookMap {
   const mod = Module as unknown as Record<symbol, HookMap>;
@@ -119,6 +121,8 @@ function retryPatch(moduleName: string, hook: HookFn) {
 }
 
 export const hookRequire = (moduleName: string, onRequire: HookFn) => {
+  if (!Module || !safeRequire) return;
+
   const registry = getHookRegistry();
 
   if (!registry.has(moduleName)) {

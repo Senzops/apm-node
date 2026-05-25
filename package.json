@@ -7,6 +7,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "worker": "./dist/index.mjs",
       "require": "./dist/index.js",
       "import": "./dist/index.mjs"
     },
@@ -26,7 +27,8 @@
     "typescript": "^5.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "bun": ">=1.0.0"
   },
   "keywords": [
     "apm",
@@ -35,7 +37,10 @@
     "node",
     "javascript",
     "api",
-    "observability"
+    "observability",
+    "cloudflare-workers",
+    "edge",
+    "universal"
   ],
   "author": "Senzops",
   "license": "MIT"

@@ -1,5 +1,11 @@
 import { defineConfig } from 'tsup';
 
+const NODE_BUILTINS = [
+  'http', 'https', 'url', 'net', 'module', 'crypto', 'async_hooks',
+  'node:http', 'node:https', 'node:url', 'node:net', 'node:module',
+  'node:crypto', 'node:async_hooks'
+];
+
 export default defineConfig([
   {
     entry: ['src/index.ts', 'src/register.ts'],
@@ -9,6 +15,8 @@ export default defineConfig([
     minify: true,
     sourcemap: true,
     splitting: false,
+    external: NODE_BUILTINS,
+    noExternal: [],
   },
   {
     entry: ['src/index.ts'],
@@ -17,5 +25,6 @@ export default defineConfig([
     minify: true,
     sourcemap: true,
     splitting: false,
+    external: NODE_BUILTINS,
   }
 ]);

@@ -1,19 +1,7 @@
 import { Transport } from './transport';
 import { Context } from './context';
 import { SenzorOptions, ActiveTrace, TaskRun, SenzorLog } from './types';
-import { randomUUID } from 'crypto';
-import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
-import { instrumentExpress } from '../instrumentation/express';
-import { instrumentFastify } from '../instrumentation/fastify';
-import { instrumentKoa } from '../instrumentation/koa';
-import { instrumentMongo } from '../instrumentation/mongo';
-import { instrumentPg } from '../instrumentation/pg';
-import { instrumentUndici } from '../instrumentation/undici';
-import { instrumentRedis } from '../instrumentation/redis';
-import { instrumentMysql } from '../instrumentation/mysql';
-import { instrumentMongoose } from '../instrumentation/mongoose';
-import { instrumentBullMQ } from '../instrumentation/bullmq';
-import { instrumentNodeCron } from '../instrumentation/cron';
+import { isNode } from './runtime';
 import { SDK_META } from '../utils/sdkMeta';
 import { parseTraceparent } from '../utils/traceContext';
 import { generateSpanId, generateTraceId } from '../utils/ids';
@@ -72,29 +60,37 @@ export class SenzorClient {
   }
 
   private installNativeInstrumentations(endpoint: string, debug: boolean) {
-    if (!this.isInstrumented) {
-      this.setupGlobalErrorHandlers();
-      this.setupLogInterception(); // Fire up Auto Log Instrumentation
+    if (this.isInstrumented) return;
 
-      try { if (this.isInstrumentationEnabled('http')) instrumentHttp(this, endpoint, this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('express')) instrumentExpress(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('fastify')) instrumentFastify(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('koa')) instrumentKoa(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('fetch')) instrumentFetch(endpoint, this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('undici')) instrumentUndici(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('mongo')) instrumentMongo(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('mongoose')) instrumentMongoose(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('pg')) instrumentPg(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('mysql')) instrumentMysql(this.options || undefined); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('redis')) instrumentRedis(this.options || undefined); } catch (e) { }
+    this.setupGlobalErrorHandlers();
+    this.setupLogInterception();
 
-      // Task Integrations 
-      try { if (this.isInstrumentationEnabled('bullmq')) instrumentBullMQ(this, debug); } catch (e) { }
-      try { if (this.isInstrumentationEnabled('cron')) instrumentNodeCron(this, debug); } catch (e) { }
+    // Fetch instrumentation works on all runtimes (Workers, Node, Bun, Deno)
+    try {
+      if (this.isInstrumentationEnabled('fetch')) {
+        const { instrumentFetch } = require('../instrumentation/http');
+        instrumentFetch(endpoint, this.options || undefined);
+      }
+    } catch {}
 
-      this.isInstrumented = true;
-      if (debug) console.log('[Senzor] Auto-instrumentation enabled');
+    // Node-only instrumentations: http, module hooking, db drivers, etc.
+    if (isNode()) {
+      try { if (this.isInstrumentationEnabled('http')) { const { instrumentHttp } = require('../instrumentation/http'); instrumentHttp(this, endpoint, this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('express')) { const { instrumentExpress } = require('../instrumentation/express'); instrumentExpress(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('fastify')) { const { instrumentFastify } = require('../instrumentation/fastify'); instrumentFastify(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('koa')) { const { instrumentKoa } = require('../instrumentation/koa'); instrumentKoa(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('undici')) { const { instrumentUndici } = require('../instrumentation/undici'); instrumentUndici(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mongo')) { const { instrumentMongo } = require('../instrumentation/mongo'); instrumentMongo(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mongoose')) { const { instrumentMongoose } = require('../instrumentation/mongoose'); instrumentMongoose(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('pg')) { const { instrumentPg } = require('../instrumentation/pg'); instrumentPg(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mysql')) { const { instrumentMysql } = require('../instrumentation/mysql'); instrumentMysql(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('redis')) { const { instrumentRedis } = require('../instrumentation/redis'); instrumentRedis(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('bullmq')) { const { instrumentBullMQ } = require('../instrumentation/bullmq'); instrumentBullMQ(this, debug); } } catch {}
+      try { if (this.isInstrumentationEnabled('cron')) { const { instrumentNodeCron } = require('../instrumentation/cron'); instrumentNodeCron(this, debug); } } catch {}
     }
+
+    this.isInstrumented = true;
+    if (debug) console.log('[Senzor] Auto-instrumentation enabled');
   }
 
   // --- Enterprise Auto-Log Interception ---
@@ -177,6 +173,8 @@ export class SenzorClient {
   }
 
   private setupGlobalErrorHandlers() {
+    if (!isNode()) return;
+
     if ((process as any).__senzorGlobalHandlersInstalled) {
       return;
     }
@@ -338,11 +336,11 @@ export class SenzorClient {
     const currentContext = Context.current();
     const triggerTraceId = currentContext?.contextType === 'apm' ? currentContext.id : undefined;
 
-    const startMemory = process.memoryUsage ? process.memoryUsage().heapUsed : 0;
-    const startCpu = process.cpuUsage ? process.cpuUsage() : undefined;
+    const startMemory = isNode() && process.memoryUsage ? process.memoryUsage().heapUsed : 0;
+    const startCpu = isNode() && process.cpuUsage ? process.cpuUsage() : undefined;
 
     const task: ActiveTrace = {
-      id: randomUUID(),
+      id: generateTraceId(),
       contextType: 'task',
       startTime: performance.now(),
       rootSpanId: generateSpanId(),
@@ -367,7 +365,7 @@ export class SenzorClient {
     task.state.ended = true;
 
     let resourceMetrics;
-    if (process.memoryUsage && task.startMemory !== undefined && process.cpuUsage && task.startCpu) {
+    if (isNode() && process.memoryUsage && task.startMemory !== undefined && process.cpuUsage && task.startCpu) {
       const endMemory = process.memoryUsage().heapUsed;
       const cpuDelta = process.cpuUsage(task.startCpu);
 

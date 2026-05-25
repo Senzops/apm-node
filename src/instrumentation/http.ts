@@ -1,6 +1,3 @@
-import http from 'http';
-import https from 'https';
-import { URL } from 'url';
 import type { SenzorClient } from '../core/client';
 import { Context } from '../core/context';
 import { getRoute, normalizePath } from '../core/normalizer';
@@ -299,7 +296,7 @@ const patchIncomingServer = (
 };
 
 const patchOutgoing = (
-  moduleRef: typeof http | typeof https,
+  moduleRef: any,
   protocol: 'http:' | 'https:',
   ingestUrl: string,
   options?: SenzorOptions
@@ -522,9 +519,19 @@ export const instrumentHttp = (
   ingestUrl: string,
   options?: SenzorOptions
 ) => {
-  patchIncomingServer(http.Server?.prototype, 'http', client, options);
-  patchIncomingServer(https.Server?.prototype, 'https', client, options);
+  let httpMod: any;
+  let httpsMod: any;
 
-  patchOutgoing(http, 'http:', ingestUrl, options);
-  patchOutgoing(https, 'https:', ingestUrl, options);
+  try { httpMod = require('http'); } catch { return; }
+  try { httpsMod = require('https'); } catch {}
+
+  if (httpMod?.Server?.prototype) {
+    patchIncomingServer(httpMod.Server.prototype, 'http', client, options);
+  }
+  if (httpsMod?.Server?.prototype) {
+    patchIncomingServer(httpsMod.Server.prototype, 'https', client, options);
+  }
+
+  patchOutgoing(httpMod, 'http:', ingestUrl, options);
+  if (httpsMod) patchOutgoing(httpsMod, 'https:', ingestUrl, options);
 };

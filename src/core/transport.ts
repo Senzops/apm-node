@@ -255,6 +255,8 @@ export class Transport {
   }
 
   private installShutdownFlush() {
+    if (typeof process === 'undefined' || typeof process.once !== 'function') return;
+
     const key = Symbol.for('senzor.transport.shutdownFlushInstalled');
     const proc = process as unknown as Record<symbol, boolean>;
     if (proc[key]) return;

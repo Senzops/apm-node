@@ -17,17 +17,32 @@
  * header your trusted reverse-proxy injects (CLIENT_IP_HEADER or X-Real-IP).
  */
 
-import { isIP } from "net";
+// ---------------------------------------------------------------------------
+// Inline IP validation (replaces Node's net.isIP to support edge runtimes)
+// ---------------------------------------------------------------------------
+
+const IPV4_PATTERN = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+const IPV6_PATTERN = /^(?:[a-fA-F0-9]{1,4}:){7}[a-fA-F0-9]{1,4}$|^::(?:[a-fA-F0-9]{1,4}:){0,5}[a-fA-F0-9]{1,4}$|^[a-fA-F0-9]{1,4}::(?:[a-fA-F0-9]{1,4}:){0,4}[a-fA-F0-9]{1,4}$|^(?:[a-fA-F0-9]{1,4}:){1,2}:(?:[a-fA-F0-9]{1,4}:){0,3}[a-fA-F0-9]{1,4}$|^(?:[a-fA-F0-9]{1,4}:){1,3}:(?:[a-fA-F0-9]{1,4}:){0,2}[a-fA-F0-9]{1,4}$|^(?:[a-fA-F0-9]{1,4}:){1,4}:(?:[a-fA-F0-9]{1,4}:)?[a-fA-F0-9]{1,4}$|^(?:[a-fA-F0-9]{1,4}:){1,5}:[a-fA-F0-9]{1,4}$|^(?:[a-fA-F0-9]{1,4}:){1,6}:$|^::$|^::1$|^fe80:.*$/i;
+
+/**
+ * Returns 4 for IPv4, 6 for IPv6, 0 for invalid.
+ * Drop-in replacement for Node's net.isIP().
+ */
+const isIP = (ip: string): number => {
+  if (IPV4_PATTERN.test(ip)) return 4;
+  if (IPV6_PATTERN.test(ip)) return 6;
+  return 0;
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Strip IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 → 1.2.3.4) */
+/** Strip IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 -> 1.2.3.4) */
 const stripIPv6Mapped = (ip: string): string =>
   ip.startsWith("::ffff:") ? ip.slice(7) : ip;
 
-/** Strip optional port from an IPv4 address (1.2.3.4:5678 → 1.2.3.4). */
+/** Strip optional port from an IPv4 address (1.2.3.4:5678 -> 1.2.3.4). */
 const stripIPv4Port = (ip: string): string => {
   const lastColon = ip.lastIndexOf(":");
   if (lastColon === -1) return ip;
@@ -35,7 +50,7 @@ const stripIPv4Port = (ip: string): string => {
   return isIP(maybeIP) === 4 ? maybeIP : ip;
 };
 
-/** Strip brackets + optional port from an IPv6 address ([::1]:5678 → ::1). */
+/** Strip brackets + optional port from an IPv6 address ([::1]:5678 -> ::1). */
 const stripIPv6Brackets = (ip: string): string => {
   const match = ip.match(/^\[([^\]]+)\](?::\d+)?$/);
   return match ? match[1] : ip;
@@ -65,7 +80,7 @@ export const isPrivateOrLoopback = (ip: string): boolean => {
     ip.startsWith("10.") ||
     ip.startsWith("192.168.") ||
     ip.startsWith("169.254.") || // link-local
-    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) // 172.16–31
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) // 172.16-31
   )
     return true;
 
