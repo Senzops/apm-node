@@ -22,7 +22,8 @@ export class Transport {
   private taskErrorQueue: SenzorError[] = [];
   private taskLogQueue: SenzorLog[] = [];
 
-  private timer: NodeJS.Timeout | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private timerStarted = false;
   private apmEndpoint: string;
   private taskEndpoint: string;
   private isFlushing = false;
@@ -38,15 +39,26 @@ export class Transport {
       ? baseEndpoint.replace('/apm', '/task')
       : `${baseEndpoint}/api/ingest/task`;
 
-    if (typeof setInterval !== 'undefined') {
-      this.timer = setInterval(
-        () => void this.flush(),
-        config.flushInterval || 10000
-      );
-      if (this.timer && typeof this.timer.unref === 'function') {
-        this.timer.unref();
+    // Timer and shutdown flush are deferred to first enqueue.
+    // Cloudflare Workers forbids setInterval / process access in global scope,
+    // and init() may be called at module evaluation time (e.g. Nitro plugins).
+  }
+
+  private ensureTimer() {
+    if (this.timerStarted) return;
+    this.timerStarted = true;
+
+    try {
+      if (typeof setInterval !== 'undefined') {
+        this.timer = setInterval(
+          () => void this.flush(),
+          this.config.flushInterval || 10000
+        );
+        if (this.timer && typeof (this.timer as any).unref === 'function') {
+          (this.timer as any).unref();
+        }
       }
-    }
+    } catch {}
 
     this.installShutdownFlush();
   }
@@ -78,6 +90,7 @@ export class Transport {
   }
 
   private enqueue<T>(queue: T[], item: T) {
+    this.ensureTimer();
     queue.push(item);
 
     const maxQueueSize = this.config.maxQueueSize ?? 10000;
