@@ -96,6 +96,11 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('dns')) { const { instrumentDns } = require('../instrumentation/dns'); instrumentDns(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('net')) { const { instrumentNet } = require('../instrumentation/net'); instrumentNet(this.options || undefined); } } catch {}
 
+      // --- Phase 2 Instrumentations: Messaging ---
+      try { if (this.isInstrumentationEnabled('kafka')) { const { instrumentKafka } = require('../instrumentation/kafka'); instrumentKafka(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('amqplib')) { const { instrumentAmqplib } = require('../instrumentation/amqplib'); instrumentAmqplib(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('socketio')) { const { instrumentSocketIO } = require('../instrumentation/socketio'); instrumentSocketIO(this.options || undefined); } } catch {}
+
       // --- Runtime Metrics ---
       if (this.options?.runtimeMetrics !== false && this.transport) {
         try {
