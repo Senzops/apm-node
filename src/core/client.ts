@@ -108,6 +108,14 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('winston')) { const { instrumentWinston } = require('../instrumentation/winston'); instrumentWinston(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('bunyan')) { const { instrumentBunyan } = require('../instrumentation/bunyan'); instrumentBunyan(this.options || undefined); } } catch {}
 
+      // --- Phase 4 Instrumentations: Cloud & Database ---
+      try { if (this.isInstrumentationEnabled('aws-sdk')) { const { instrumentAwsSdk } = require('../instrumentation/aws-sdk'); instrumentAwsSdk(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('knex')) { const { instrumentKnex } = require('../instrumentation/knex'); instrumentKnex(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('tedious')) { const { instrumentTedious } = require('../instrumentation/tedious'); instrumentTedious(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('cassandra')) { const { instrumentCassandra } = require('../instrumentation/cassandra'); instrumentCassandra(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('memcached')) { const { instrumentMemcached } = require('../instrumentation/memcached'); instrumentMemcached(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('generic-pool')) { const { instrumentGenericPool } = require('../instrumentation/generic-pool'); instrumentGenericPool(this.options || undefined); } } catch {}
+
       // --- Runtime Metrics ---
       if (this.options?.runtimeMetrics !== false && this.transport) {
         try {
