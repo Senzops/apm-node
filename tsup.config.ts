@@ -8,7 +8,7 @@ const NODE_BUILTINS = [
 
 export default defineConfig([
   {
-    entry: ['src/index.ts', 'src/register.ts'],
+    entry: ['src/index.ts', 'src/register.ts', 'src/lambda-handler.ts'],
     format: ['cjs', 'esm'],
     dts: true,
     clean: true,

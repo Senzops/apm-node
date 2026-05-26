@@ -245,6 +245,64 @@ export default {
 
 ### AWS Lambda
 
+Three deployment options, from zero-code to code-level:
+
+#### Option 1: Lambda Extension Layer (Zero Code Changes, Recommended)
+
+Build and publish a Lambda Layer, then reconfigure your function. No changes to your application code.
+
+```sh
+# 1. Build the layer
+mkdir -p senzor-layer/nodejs && cd senzor-layer/nodejs
+npm init -y && npm install @senzops/apm-node
+cd .. && zip -r senzor-apm-layer.zip nodejs/
+
+# 2. Publish
+aws lambda publish-layer-version \
+  --layer-name senzor-apm-node \
+  --zip-file fileb://senzor-apm-layer.zip \
+  --compatible-runtimes nodejs18.x nodejs20.x nodejs22.x
+
+# 3. Attach to function and configure
+aws lambda update-function-configuration \
+  --function-name my-function \
+  --layers <LAYER_ARN> \
+  --handler @senzops/apm-node/dist/lambda-handler.handler \
+  --environment Variables="{ \
+    SENZOR_API_KEY=sz_apm_xxx, \
+    SENZOR_LAMBDA_HANDLER=index.handler, \
+    NODE_OPTIONS=--require @senzops/apm-node/register \
+  }"
+```
+
+The auto-handler wrapper reads `SENZOR_LAMBDA_HANDLER` to load your original handler, wraps it with full APM instrumentation, and re-exports it for Lambda to invoke.
+
+**AWS CDK:**
+
+```ts
+const senzorLayer = new lambda.LayerVersion(this, 'SenzorApmLayer', {
+  code: lambda.Code.fromAsset(path.join(__dirname, 'senzor-layer')),
+  compatibleRuntimes: [lambda.Runtime.NODEJS_18_X, lambda.Runtime.NODEJS_20_X],
+  description: 'Senzor APM Lambda Extension Layer',
+});
+
+const fn = new lambda.Function(this, 'MyFunction', {
+  runtime: lambda.Runtime.NODEJS_20_X,
+  handler: '@senzops/apm-node/dist/lambda-handler.handler',
+  code: lambda.Code.fromAsset('lambda'),
+  layers: [senzorLayer],
+  environment: {
+    SENZOR_API_KEY: 'sz_apm_xxx',
+    SENZOR_LAMBDA_HANDLER: 'index.handler',
+    NODE_OPTIONS: '--require @senzops/apm-node/register',
+  },
+});
+```
+
+Also works with SAM, Serverless Framework, Terraform, and the AWS Console. See the [wiki](wiki.md#4-aws-lambda-integration) for full examples.
+
+#### Option 2: Code-Level Handler Wrapper
+
 ```ts
 import Senzor from '@senzops/apm-node';
 
@@ -255,25 +313,15 @@ export const handler = Senzor.wrapLambda(async (event, context) => {
 });
 ```
 
-`wrapLambda` provides:
+#### What's Captured
+
+Both approaches provide:
 - **Cold start detection** tagged on the first invocation per container
 - **Trigger-type detection**: API Gateway v1/v2, ALB, SQS, SNS, DynamoDB Streams, EventBridge, S3, Scheduled events
 - **Lambda context extraction**: function name, request ID, memory limit, log group, invoked ARN, region, account ID
 - **Forced flush** before each invocation returns (Lambda freezes the process immediately after)
 - **Lambda Extensions API** registration for SHUTDOWN lifecycle safety-net flush
-
-#### Lambda Layer Deployment (No Code Changes)
-
-```sh
-# Set environment variables on your Lambda function
-SENZOR_API_KEY=sz_apm_xxx
-NODE_OPTIONS=--require @senzops/apm-node/register
-```
-
-When running inside Lambda, the SDK auto-detects the environment and optimizes:
-- Runtime metrics are disabled (meaningless per-invocation)
-- Batch size reduced to 10
-- Flush interval set to 0 (flush only on demand)
+- **Auto-optimized settings**: runtime metrics disabled, batch size 10, flush on demand only
 
 ---
 

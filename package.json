@@ -15,6 +15,11 @@
       "types": "./dist/register.d.ts",
       "require": "./dist/register.js",
       "import": "./dist/register.mjs"
+    },
+    "./lambda-handler": {
+      "types": "./dist/lambda-handler.d.ts",
+      "require": "./dist/lambda-handler.js",
+      "import": "./dist/lambda-handler.mjs"
     }
   },
   "scripts": {
