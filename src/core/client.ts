@@ -101,6 +101,13 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('amqplib')) { const { instrumentAmqplib } = require('../instrumentation/amqplib'); instrumentAmqplib(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('socketio')) { const { instrumentSocketIO } = require('../instrumentation/socketio'); instrumentSocketIO(this.options || undefined); } } catch {}
 
+      // --- Phase 3 Instrumentations: Frameworks & Log Correlation ---
+      try { if (this.isInstrumentationEnabled('nestjs')) { const { instrumentNestJS } = require('../instrumentation/nestjs'); instrumentNestJS(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('hapi')) { const { instrumentHapi } = require('../instrumentation/hapi'); instrumentHapi(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('pino')) { const { instrumentPino } = require('../instrumentation/pino'); instrumentPino(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('winston')) { const { instrumentWinston } = require('../instrumentation/winston'); instrumentWinston(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('bunyan')) { const { instrumentBunyan } = require('../instrumentation/bunyan'); instrumentBunyan(this.options || undefined); } } catch {}
+
       // --- Runtime Metrics ---
       if (this.options?.runtimeMetrics !== false && this.transport) {
         try {
