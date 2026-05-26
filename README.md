@@ -1,13 +1,8 @@
 # @senzops/apm-node
 
-Official Node.js SDK for Senzor APM.
+Official Node.js APM SDK for [Senzor](https://senzor.dev). Zero-dependency, production-grade distributed tracing, error tracking, log correlation, background task monitoring, and runtime metrics for Node.js services.
 
-`@senzops/apm-node` captures application traces, spans, errors, logs, and task runs from Node.js API services and sends them to Senzor using the Senzor ingestion format. It is designed to be used directly instead of OpenTelemetry in Senzor-instrumented Node services.
-
-The SDK has two supported modes:
-
-- Production auto-instrumentation through a preload entrypoint.
-- Explicit framework wrappers and manual APIs for environments where preload is not available.
+Replaces OpenTelemetry auto-instrumentation with a lightweight, Senzor-native alternative. 43 auto-instrumentations, 8 framework wrappers, and full AWS Lambda support in a single package with zero runtime dependencies.
 
 ## Installation
 
@@ -15,384 +10,470 @@ The SDK has two supported modes:
 npm install @senzops/apm-node
 ```
 
-```sh
-yarn add @senzops/apm-node
-```
+## Quick Start
+
+### Option 1: Preload Mode (Recommended)
+
+Preload ensures instrumentation hooks install before your application imports any library.
 
 ```sh
-pnpm add @senzops/apm-node
+# CommonJS
+SENZOR_API_KEY=sz_apm_xxx node -r @senzops/apm-node/register server.js
+
+# ESM
+SENZOR_API_KEY=sz_apm_xxx node --import @senzops/apm-node/register server.mjs
 ```
 
-## Requirements
-
-- Node.js `18.0.0` or newer.
-- A Senzor service API key.
-- Network access from the application runtime to the Senzor ingest endpoint.
-
-## Recommended Production Setup
-
-Use preload mode so Senzor can patch Node and common libraries before your application imports them.
-
-```sh
-SENZOR_API_KEY=sz_apm_your_key_here node -r @senzops/apm-node/register server.js
-```
-
-For ESM applications:
-
-```sh
-SENZOR_API_KEY=sz_apm_your_key_here node --import @senzops/apm-node/register server.mjs
-```
-
-With preload enabled, the SDK can automatically capture inbound HTTP requests for common Node frameworks because it instruments the underlying `http` and `https` server lifecycle.
-
-## Programmatic Setup
-
-If preload mode is not possible, initialize Senzor as early as possible in your application entrypoint.
-
-```js
-const Senzor = require('@senzops/apm-node').default;
-
-Senzor.init({
-  apiKey: 'sz_apm_your_key_here',
-  endpoint: 'https://api.senzor.dev',
-  batchSize: 100,
-  flushInterval: 10000
-});
-```
-
-For TypeScript or ESM:
+### Option 2: Programmatic Init
 
 ```ts
 import Senzor from '@senzops/apm-node';
 
 Senzor.init({
-  apiKey: process.env.SENZOR_API_KEY!
+  apiKey: process.env.SENZOR_API_KEY!,
 });
 ```
 
-## What Gets Captured
+Initialize as early as possible, before importing application modules.
 
-The SDK captures these signals using the Senzor ingestion format:
+---
 
-- APM traces for inbound API requests.
-- Child spans for outgoing HTTP calls, database operations, cache calls, and custom work.
-- Errors with trace or task context.
-- Console logs correlated with the active trace or task.
-- Background task runs for queues and scheduled jobs.
+## Auto-Instrumentation Coverage
 
-Current native auto-instrumentation coverage:
+All instrumentations activate automatically when the corresponding library is imported. No configuration required.
 
-| Area | Libraries and runtimes |
-| --- | --- |
-| Inbound HTTP | Node `http`, Node `https`, Express, NestJS, Fastify, Koa, H3, Nuxt/Nitro, Restify, Hapi-style services through Node server capture |
-| Outbound HTTP | `http`, `https`, `fetch`, `undici` |
-| Databases | `pg`, `mongodb`, `mongoose`, `mysql`, `mysql2` |
-| Cache | `redis`, `ioredis` |
-| Jobs | `bullmq`, `node-cron` |
-| Logs | `console.log`, `console.info`, `console.warn`, `console.error`, `console.debug` |
-| Errors | `uncaughtException`, `unhandledRejection`, process warnings, manual captured exceptions |
+### Web Frameworks & HTTP
 
-## Express Example
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 1 | Node `http` / `https` | `http` | Inbound requests, outbound calls, distributed trace propagation |
+| 2 | `fetch` (global) | `fetch` | Outbound HTTP, W3C Traceparent propagation |
+| 3 | `undici` | `undici` | Outbound HTTP via Node's native HTTP client |
+| 4 | Express | `express` | Route matching, middleware spans, error capture |
+| 5 | Fastify | `fastify` | Route matching, hook spans, lifecycle spans |
+| 6 | Koa | `koa` | Middleware stack, route detection |
+| 7 | NestJS | `nestjs` | Controller/method resolution, Guards, Interceptors, Pipes |
+| 8 | Hapi | `hapi` | Route handling, request lifecycle |
+| 9 | Restify | `restify` | Route matching, handler chain spans |
+| 10 | Connect | `connect` | Middleware stack instrumentation |
 
-Preload mode is preferred:
+### Databases
 
-```sh
-SENZOR_API_KEY=sz_apm_your_key_here node -r @senzops/apm-node/register app.js
-```
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 11 | `pg` (PostgreSQL) | `pg` | Queries, prepared statements, row counts, sanitized SQL |
+| 12 | `mongodb` | `mongo` | Collection operations (find, insert, update, delete, aggregate, bulk) |
+| 13 | `mongoose` | `mongoose` | Model operations with model/collection names |
+| 14 | `mysql` / `mysql2` | `mysql` | Queries, sanitized SQL, connection metadata |
+| 15 | `redis` / `ioredis` | `redis` | Commands (GET, SET, HGETALL, etc.), key names |
+| 16 | `knex` | `knex` | Query builder operations, raw queries, transactions |
+| 17 | `tedious` (SQL Server) | `tedious` | T-SQL queries, stored procedures, row counts |
+| 18 | `cassandra-driver` | `cassandra` | CQL queries, batch operations, prepared statements |
+| 19 | `memcached` | `memcached` | get, set, delete, incr/decr, flush operations |
 
-You can still use the Express middleware to refine route detection and capture Express error objects:
+### Messaging & Queues
 
-```js
-const express = require('express');
-const Senzor = require('@senzops/apm-node').default;
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 20 | `kafkajs` | `kafka` | Producer send, consumer message processing, topic/partition |
+| 21 | `amqplib` (RabbitMQ) | `amqplib` | Publish, consume, ack/nack, queue/exchange names |
+| 22 | `socket.io` | `socketio` | Event emit/receive, namespace, room operations |
+| 23 | `bullmq` | `bullmq` | Worker job processing as task runs, queue delay, retries |
+| 24 | `node-cron` | `cron` | Scheduled job execution as task runs |
 
-Senzor.init({
-  apiKey: process.env.SENZOR_API_KEY
-});
+### AI / LLM SDKs
+
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 25 | `openai` | `openai` | Chat completions, embeddings, images, audio, model, token usage |
+| 26 | `@anthropic-ai/sdk` | `anthropic` | Messages, completions, model, input/output tokens, stop reason |
+| 27 | `@google/generative-ai` | `google-genai` | generateContent, chat, embeddings, countTokens, token usage |
+| 28 | `@google-cloud/vertexai` | `google-genai` | Vertex AI generateContent, generateContentStream |
+| 29 | `@azure/openai` | `azure-openai` | Chat, completions, embeddings, images, audio (v1.x API) |
+| 30 | `cohere-ai` | `cohere` | Chat, embed, rerank, classify, summarize, tokenize |
+| 31 | `@mistralai/mistralai` | `mistral` | Chat, FIM, embeddings, model, token usage |
+
+All AI instrumentations follow [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reason`).
+
+### Cloud & Infrastructure
+
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 32 | `@aws-sdk/*` (AWS SDK v3) | `aws-sdk` | All AWS service calls (S3, DynamoDB, SQS, SNS, Lambda, etc.), request ID, region, HTTP status |
+| 33 | AWS Bedrock Runtime | `aws-sdk` | Model invocations with GenAI attributes (tokens, model ID, finish reason) |
+| 34 | Firebase Admin (Firestore) | `firebase` | Document CRUD, collection queries, transactions, batch commits |
+| 35 | Firebase Admin (Auth) | `firebase` | User management, token verification, session cookies (16 methods) |
+| 36 | Firebase Admin (FCM) | `firebase` | Push notification delivery, multicast, topic operations (9 methods) |
+
+### Logging Libraries
+
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 37 | `pino` | `pino` | Trace/span ID injection into structured log output |
+| 38 | `winston` | `winston` | Trace/span ID injection into transport output |
+| 39 | `bunyan` | `bunyan` | Trace/span ID injection into log records |
+
+### RPC & Network
+
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 40 | `@grpc/grpc-js` | `grpc` | Unary/streaming calls, service/method, status codes, metadata propagation |
+| 41 | `graphql` | `graphql` | Resolvers, operation name/type, field paths, errors |
+| 42 | Node `dns` | `dns` | DNS lookups, resolve calls, hostname, record types |
+| 43 | Node `net` | `net` | TCP socket connections, data transfer, connection timing |
+
+### Utilities
+
+| # | Library | Instrumentation Key | What's Captured |
+|---|---------|-------------------|-----------------|
+| 44 | `dataloader` | `dataloader` | Batch load calls, batch size, cache hits |
+| 45 | `lru-memoizer` | `lru-memoizer` | Memoized function calls, cache hit/miss |
+| 46 | `generic-pool` | `generic-pool` | Pool acquire/release, pool size, pending count |
+| 47 | Node `fs` | `fs` | File system reads, writes, stats, directory operations |
+
+### Runtime Metrics
+
+Collected every 15 seconds (configurable) and sent alongside trace data:
+
+- **Event Loop**: lag (p50, p99, max), utilization (ELU)
+- **Garbage Collection**: duration by GC type (minor, major, incremental, weakcb)
+- **Memory**: heap used/total, RSS, external, array buffers
+- **Active Handles & Requests**: open file descriptors, active network connections
+
+---
+
+## Framework Wrappers
+
+### Express
+
+```ts
+import Senzor from '@senzops/apm-node';
+
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
 
 const app = express();
-
-app.use(Senzor.requestHandler());
-
-app.get('/users/:id', async (req, res) => {
-  res.json({ id: req.params.id });
-});
-
-app.use(Senzor.errorHandler());
-
+app.use(Senzor.requestHandler());    // First middleware
+app.get('/users/:id', handler);
+app.use(Senzor.errorHandler());      // Last middleware
 app.listen(3000);
 ```
 
-## Fastify Example
+### Fastify
 
 ```ts
-import Fastify from 'fastify';
 import Senzor from '@senzops/apm-node';
-
-const fastify = Fastify();
 
 fastify.register(Senzor.fastifyPlugin, {
-  apiKey: process.env.SENZOR_API_KEY!
+  apiKey: process.env.SENZOR_API_KEY!,
 });
-
-fastify.get('/health', async () => ({ ok: true }));
-
-await fastify.listen({ port: 3000 });
 ```
 
-## Next.js Example
-
-App Router:
+### NestJS
 
 ```ts
 import Senzor from '@senzops/apm-node';
 
-Senzor.init({
-  apiKey: process.env.SENZOR_API_KEY!
-});
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
 
-export const GET = Senzor.wrapNextRoute(async () => {
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.use(Senzor.requestHandler());
+  await app.listen(3000);
+}
+```
+
+### Next.js (App Router)
+
+```ts
+import Senzor from '@senzops/apm-node';
+
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
+
+export const GET = Senzor.wrapNextRoute(async (req) => {
   return Response.json({ ok: true });
 });
 ```
 
-Pages Router:
+### Next.js (Pages Router)
 
 ```ts
 import Senzor from '@senzops/apm-node';
 
-Senzor.init({
-  apiKey: process.env.SENZOR_API_KEY!
-});
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
 
-export default Senzor.wrapNextPages(async function handler(req, res) {
+export default Senzor.wrapNextPages(async (req, res) => {
   res.status(200).json({ ok: true });
 });
 ```
 
-In serverless runtimes, flush before the function exits when you need deterministic delivery:
+### H3 / Nuxt / Nitro
 
 ```ts
-await Senzor.flush();
+import Senzor from '@senzops/apm-node';
+
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
+
+export default Senzor.wrapH3(defineEventHandler(async (event) => {
+  return { ok: true };
+}));
 ```
+
+### Nitro Plugin (Cloudflare Workers)
+
+```ts
+import { Senzor } from '@senzops/apm-node';
+
+export default defineNitroPlugin((nitroApp) => {
+  Senzor.init({ apiKey: '<YOUR_APM_KEY>' });
+  Senzor.nitroPlugin(nitroApp);
+});
+```
+
+### Cloudflare Workers
+
+```ts
+import Senzor from '@senzops/apm-node';
+
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
+
+export default {
+  fetch: Senzor.worker(async (request, env, ctx) => {
+    return new Response('OK');
+  }),
+};
+```
+
+### AWS Lambda
+
+```ts
+import Senzor from '@senzops/apm-node';
+
+Senzor.init({ apiKey: process.env.SENZOR_API_KEY! });
+
+export const handler = Senzor.wrapLambda(async (event, context) => {
+  return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+});
+```
+
+`wrapLambda` provides:
+- **Cold start detection** tagged on the first invocation per container
+- **Trigger-type detection**: API Gateway v1/v2, ALB, SQS, SNS, DynamoDB Streams, EventBridge, S3, Scheduled events
+- **Lambda context extraction**: function name, request ID, memory limit, log group, invoked ARN, region, account ID
+- **Forced flush** before each invocation returns (Lambda freezes the process immediately after)
+- **Lambda Extensions API** registration for SHUTDOWN lifecycle safety-net flush
+
+#### Lambda Layer Deployment (No Code Changes)
+
+```sh
+# Set environment variables on your Lambda function
+SENZOR_API_KEY=sz_apm_xxx
+NODE_OPTIONS=--require @senzops/apm-node/register
+```
+
+When running inside Lambda, the SDK auto-detects the environment and optimizes:
+- Runtime metrics are disabled (meaningless per-invocation)
+- Batch size reduced to 10
+- Flush interval set to 0 (flush only on demand)
+
+---
+
+## Background Task Monitoring
+
+### Auto-Instrumented Tasks
+
+BullMQ workers and node-cron jobs are captured automatically as task runs with queue delay, retry count, dead-letter detection, and CPU/memory resource metrics.
+
+### Manual Task Wrapping
+
+```ts
+const processPayment = Senzor.wrapTask(
+  'process_payment',
+  'custom',
+  { metadata: { owner: 'billing' } },
+  async (invoiceId: string) => {
+    await chargeCustomer(invoiceId);
+  }
+);
+
+await processPayment('inv_123');
+```
+
+---
 
 ## Manual Spans
 
-Use manual spans for business operations that are not covered by auto-instrumentation.
-
 ```ts
-const span = Senzor.startSpan('calculate_invoice_total', 'function');
-
+const span = Senzor.startSpan('calculate_invoice', 'function');
 try {
-  const total = await calculateInvoiceTotal(invoiceId);
+  const total = await calculateInvoice(invoiceId);
   span.end({ invoiceId, total }, 200);
-  return total;
 } catch (error) {
   span.end({ invoiceId, error: String(error) }, 500);
-  Senzor.captureException(error, { invoiceId });
   throw error;
 }
 ```
 
-## Background Tasks
+Span types: `http`, `db`, `function`, `custom`, `rpc`, `messaging`, `dns`, `net`.
+
+---
+
+## Error Tracking
+
+Automatic capture of `uncaughtException`, `unhandledRejection`, process warnings, `SIGTERM`, and `SIGINT` with full stack traces, process context, and memory snapshots.
+
+Manual capture:
 
 ```ts
-const sendInvoiceEmail = Senzor.wrapTask(
-  'send_invoice_email',
-  'custom',
-  { metadata: { owner: 'billing' } },
-  async (invoiceId: string) => {
-    await sendEmail(invoiceId);
-  }
-);
-
-await sendInvoiceEmail('inv_123');
+Senzor.captureException(error, { userId, operation: 'charge' });
 ```
 
-Auto-instrumented task integrations:
+---
 
-- BullMQ workers.
-- node-cron scheduled jobs.
+## Log Correlation
+
+Console logs (`log`, `info`, `warn`, `error`, `debug`) are automatically captured and correlated with the active trace or task context. Structured logging libraries (pino, winston, bunyan) get trace/span IDs injected for correlation.
+
+---
 
 ## Configuration
 
 | Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `apiKey` | `string` | Required for sending data | Senzor service API key. |
-| `endpoint` | `string` | `https://api.senzor.dev/api/ingest/apm` | Senzor ingest endpoint or base URL. |
-| `batchSize` | `number` | `100` | Flush when this many queued telemetry items are collected. |
-| `flushInterval` | `number` | `10000` | Flush interval in milliseconds. |
-| `flushTimeoutMs` | `number` | `5000` | Timeout for a single ingest request. |
-| `maxQueueSize` | `number` | `10000` | Maximum queued items per queue before old items are dropped. |
-| `maxSpansPerTrace` | `number` | `500` | Maximum child spans retained for a single trace or task. |
-| `maxAttributeLength` | `number` | `2048` | Maximum string length for attributes and metadata values. |
-| `maxAttributes` | `number` | `64` | Maximum number of attributes retained per object. |
-| `captureHeaders` | `boolean` | `false` | Capture sanitized request headers in trace metadata. |
-| `captureDbStatement` | `boolean` | SDK sanitizes SQL by default | Controls how much SQL statement text is retained. |
-| `instrumentations` | `boolean \| string[]` | `true` | Disable all instrumentation with `false`, or enable only named integrations. |
-| `frameworkSpans` | `boolean` | `true` | Capture framework middleware, router, handler, and lifecycle spans. |
-| `captureMiddlewareSpans` | `boolean` | `true` | Capture middleware spans for supported frameworks. |
-| `captureRouterSpans` | `boolean` | `true` | Capture router/route-dispatch spans. |
-| `captureLifecycleHookSpans` | `boolean` | `true` | Capture lifecycle hook spans such as Fastify hooks. |
-| `ignoreFrameworkSpanTypes` | `string[]` | `[]` | Skip selected framework span types such as `middleware` or `router`. |
-| `autoLogs` | `boolean` | `true` | Capture console logs and correlate them with active traces or tasks. |
-| `debug` | `boolean` | `false` | Print SDK diagnostics. |
+|--------|------|---------|-------------|
+| `apiKey` | `string` | **required** | Senzor service API key |
+| `endpoint` | `string` | `https://api.senzor.dev` | Ingest endpoint |
+| `batchSize` | `number` | `100` | Flush threshold |
+| `flushInterval` | `number` | `10000` | Flush interval (ms) |
+| `flushTimeoutMs` | `number` | `5000` | Per-request timeout (ms) |
+| `maxQueueSize` | `number` | `10000` | Max queued items before drop |
+| `maxSpansPerTrace` | `number` | `500` | Max child spans per trace |
+| `maxAttributeLength` | `number` | `2048` | Max string length for attributes |
+| `maxAttributes` | `number` | `64` | Max attributes per object |
+| `captureHeaders` | `boolean` | `false` | Capture sanitized request headers |
+| `captureDbStatement` | `boolean` | `true` | Capture sanitized SQL in spans |
+| `instrumentations` | `boolean \| string[]` | `true` | Enable/disable specific instrumentations |
+| `frameworkSpans` | `boolean` | `true` | Capture framework middleware/router spans |
+| `captureMiddlewareSpans` | `boolean` | `true` | Capture middleware execution spans |
+| `captureRouterSpans` | `boolean` | `true` | Capture router dispatch spans |
+| `captureLifecycleHookSpans` | `boolean` | `true` | Capture framework lifecycle hook spans |
+| `autoLogs` | `boolean` | `true` | Capture and correlate console logs |
+| `runtimeMetrics` | `boolean` | `true` | Collect runtime metrics (event loop, GC, heap) |
+| `runtimeMetricsInterval` | `number` | `15000` | Runtime metrics collection interval (ms) |
+| `debug` | `boolean` | `false` | Print SDK diagnostics |
 
-Named instrumentation values include:
+### Selective Instrumentation
 
 ```ts
-[
-  'http',
-  'express',
-  'fastify',
-  'koa',
-  'fetch',
-  'undici',
-  'mongo',
-  'mongoose',
-  'pg',
-  'mysql',
-  'redis',
-  'bullmq',
-  'cron'
-]
+// Enable only specific instrumentations
+Senzor.init({
+  apiKey: process.env.SENZOR_API_KEY!,
+  instrumentations: ['http', 'fetch', 'pg', 'redis', 'openai'],
+});
+
+// Disable all auto-instrumentation (manual APIs only)
+Senzor.init({
+  apiKey: process.env.SENZOR_API_KEY!,
+  instrumentations: false,
+});
 ```
+
+All instrumentation key names:
+
+```
+http, fetch, undici, express, fastify, koa, nestjs, hapi, restify, connect,
+pg, mongo, mongoose, mysql, redis, knex, tedious, cassandra, memcached,
+kafka, amqplib, socketio, bullmq, cron,
+openai, anthropic, google-genai, azure-openai, cohere, mistral,
+aws-sdk, firebase,
+pino, winston, bunyan,
+grpc, graphql, dns, net,
+dataloader, lru-memoizer, generic-pool, fs
+```
+
+---
 
 ## Environment Variables
 
-The preload entrypoint reads these environment variables:
-
 | Variable | Description |
-| --- | --- |
-| `SENZOR_API_KEY` | Service API key. |
-| `SENZOR_APM_API_KEY` | Alternative API key variable. |
-| `SENZOR_SERVICE_API_KEY` | Alternative API key variable. |
-| `SENZOR_ENDPOINT` | Ingest endpoint or base URL. |
-| `SENZOR_APM_ENDPOINT` | Alternative endpoint variable. |
-| `SENZOR_DEBUG` | Set to `true` or `1` to enable SDK diagnostics. |
-| `SENZOR_AUTO_LOGS` | Set to `false` to disable console log capture. |
-| `SENZOR_BATCH_SIZE` | Batch size. |
-| `SENZOR_FLUSH_INTERVAL` | Flush interval in milliseconds. |
-| `SENZOR_FLUSH_TIMEOUT_MS` | Flush timeout in milliseconds. |
-| `SENZOR_MAX_QUEUE_SIZE` | Maximum queued telemetry items per queue. |
-| `SENZOR_MAX_SPANS_PER_TRACE` | Maximum spans retained per trace. |
-| `SENZOR_CAPTURE_HEADERS` | Set to `true` to capture sanitized headers. |
-| `SENZOR_CAPTURE_DB_STATEMENT` | Set to `false` for more restrictive SQL metadata. |
-| `SENZOR_FRAMEWORK_SPANS` | Set to `false` to disable framework execution spans. |
-| `SENZOR_CAPTURE_MIDDLEWARE_SPANS` | Set to `false` to disable middleware spans. |
-| `SENZOR_CAPTURE_ROUTER_SPANS` | Set to `false` to disable router spans. |
-| `SENZOR_CAPTURE_LIFECYCLE_HOOK_SPANS` | Set to `false` to disable lifecycle hook spans. |
+|----------|-------------|
+| `SENZOR_API_KEY` | Service API key |
+| `SENZOR_ENDPOINT` | Ingest endpoint |
+| `SENZOR_DEBUG` | `true` / `1` to enable diagnostics |
+| `SENZOR_AUTO_LOGS` | `false` to disable log capture |
+| `SENZOR_BATCH_SIZE` | Batch size |
+| `SENZOR_FLUSH_INTERVAL` | Flush interval (ms) |
+| `SENZOR_FLUSH_TIMEOUT_MS` | Flush timeout (ms) |
+| `SENZOR_MAX_QUEUE_SIZE` | Max queued items |
+| `SENZOR_MAX_SPANS_PER_TRACE` | Max spans per trace |
+| `SENZOR_CAPTURE_HEADERS` | `true` to capture headers |
+| `SENZOR_CAPTURE_DB_STATEMENT` | `false` for restrictive SQL |
+| `SENZOR_FRAMEWORK_SPANS` | `false` to disable framework spans |
+| `SENZOR_CAPTURE_MIDDLEWARE_SPANS` | `false` to disable middleware spans |
+| `SENZOR_CAPTURE_ROUTER_SPANS` | `false` to disable router spans |
+| `SENZOR_CAPTURE_LIFECYCLE_HOOK_SPANS` | `false` to disable lifecycle spans |
+| `SENZOR_RUNTIME_METRICS` | `false` to disable runtime metrics |
+| `SENZOR_RUNTIME_METRICS_INTERVAL` | Collection interval (ms) |
 
-## Ingestion Payload Shape
+Alternative API key variables: `SENZOR_APM_API_KEY`, `SENZOR_SERVICE_API_KEY`.
+Alternative endpoint variables: `SENZOR_APM_ENDPOINT`.
 
-The SDK sends APM data to `/api/ingest/apm`:
+---
 
-```json
-{
-  "traces": [
-    {
-      "traceId": "f3b2c2c9c70443f5a4b7f0ff6d5b9a17",
-      "method": "GET",
-      "route": "/users/:id",
-      "path": "/users/123?include=roles",
-      "status": 200,
-      "duration": 42.81,
-      "ip": "203.0.113.10",
-      "userAgent": "Mozilla/5.0",
-      "timestamp": "2026-05-16T15:30:00.000Z",
-      "spans": [
-        {
-          "spanId": "9d8a4d5f17e24d2a",
-          "parentSpanId": "91f6c551d5a2403f",
-          "name": "Postgres SELECT",
-          "type": "db",
-          "startTime": 4.22,
-          "duration": 12.45,
-          "status": 0,
-          "meta": {
-            "operation": "SELECT",
-            "db.system.name": "postgresql",
-            "db.operation.name": "SELECT"
-          }
-        }
-      ]
-    }
-  ],
-  "errors": [],
-  "logs": []
-}
+## Distributed Tracing
+
+The SDK automatically propagates trace context on outgoing HTTP calls:
+
+```
+traceparent: 00-{traceId}-{spanId}-01
+x-senzor-trace-id: {traceId}
+x-senzor-parent-span-id: {spanId}
 ```
 
-Task data is sent to `/api/ingest/task`:
+Incoming `traceparent` headers are parsed to link upstream traces.
 
-```json
-{
-  "runs": [
-    {
-      "runId": "3917bd35-b1d6-4e23-a1d2-d969e1a7d6a1",
-      "taskName": "billing:send_invoice_email",
-      "taskType": "queue",
-      "status": "success",
-      "duration": 188.3,
-      "queueDelay": 92,
-      "attempts": 1,
-      "resourceMetrics": {
-        "memoryDeltaBytes": 1048576,
-        "cpuUserUs": 12000,
-        "cpuSystemUs": 3000
-      },
-      "spans": [],
-      "timestamp": "2026-05-16T15:30:00.000Z"
-    }
-  ],
-  "errors": [],
-  "logs": []
-}
-```
+---
 
 ## Security Defaults
 
-The SDK redacts common sensitive fields from attributes, headers, errors, and logs:
+Sensitive fields are automatically redacted from attributes, headers, logs, and error context:
 
-- `authorization`
-- `cookie`
-- `set-cookie`
-- `password`
-- `secret`
-- `token`
-- `apiKey`
-- `x-api-key`
-- `accessToken`
-- `refreshToken`
-- `clientSecret`
-- `privateKey`
+`authorization`, `cookie`, `set-cookie`, `password`, `secret`, `token`, `apiKey`, `x-api-key`, `accessToken`, `refreshToken`, `clientSecret`, `privateKey`
 
-Header capture is disabled by default. SQL metadata is normalized to reduce sensitive values and high-cardinality payloads.
+Header capture is disabled by default. SQL statements are normalized to strip literal values.
 
-## Production Notes
+---
 
-- Use preload mode whenever possible.
-- Initialize the SDK before importing application modules when preload mode is not available.
-- Keep `debug` disabled in production unless actively troubleshooting.
-- Use `Senzor.flush()` before serverless function exit.
-- Keep route names low-cardinality, for example `/users/:id` instead of `/users/123`.
-- Do not capture request or response bodies unless your service has a strict data policy and the ingestion backend is prepared for that data.
-
-## Public API
+## Public API Reference
 
 ```ts
-Senzor.init(options)
-Senzor.preload(options)
-Senzor.flush()
-Senzor.track(data)
-Senzor.startSpan(name, type)
-Senzor.captureException(error, context)
-Senzor.wrapTask(name, type, options, fn)
-Senzor.startTask(name, type, options, fn)
-Senzor.requestHandler()
-Senzor.errorHandler()
-Senzor.wrapNextRoute(handler)
-Senzor.wrapNextPages(handler)
-Senzor.wrapH3(handler)
-Senzor.fastifyPlugin
+Senzor.init(options)                    // Initialize SDK
+Senzor.preload(options)                 // Preload instrumentation hooks
+Senzor.flush()                          // Force flush queued telemetry
+Senzor.track(data)                      // Send a manual trace
+Senzor.startSpan(name, type)            // Start a manual span
+Senzor.captureException(error, ctx)     // Capture an error
+
+Senzor.wrapTask(name, type, opts, fn)   // Wrap a function as a task
+Senzor.startTask(name, type, opts, fn)  // Start a task context
+
+Senzor.requestHandler()                 // Express request middleware
+Senzor.errorHandler()                   // Express error middleware
+Senzor.fastifyPlugin                    // Fastify plugin
+Senzor.wrapNextRoute(handler)           // Next.js App Router wrapper
+Senzor.wrapNextPages(handler)           // Next.js Pages Router wrapper
+Senzor.wrapH3(handler)                  // H3/Nuxt/Nitro wrapper
+Senzor.nitroPlugin                      // Nitro plugin (Cloudflare Workers)
+Senzor.worker(handler)                  // Cloudflare Workers wrapper
+Senzor.wrapLambda(handler)              // AWS Lambda wrapper
 ```
+
+---
+
+## Requirements
+
+- Node.js >= 18.0.0 (or Bun >= 1.0.0)
+- A Senzor service API key
+- Network access to the Senzor ingest endpoint
+
+## License
+
+MIT

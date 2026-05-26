@@ -1,3 +1,12 @@
+# 1.3.0
+
+feat: AI SDK instrumentation — Anthropic, Google Gemini (generative-ai + Vertex AI), Azure OpenAI, Cohere, Mistral
+feat: Firebase Admin SDK instrumentation — Firestore CRUD/queries, Auth (16 methods), FCM Messaging (9 methods)
+feat: AWS Lambda handler wrapper (wrapLambda) with cold start detection, trigger-type detection, Lambda context extraction, forced flush, and Lambda Extensions API SHUTDOWN registration
+feat: AWS Bedrock Runtime GenAI attribute extraction (InvokeModel, Converse API) with token usage and finish reason
+feat: Lambda environment auto-detection in register.ts — disables runtime metrics, optimizes batch/flush settings
+feat: 43 total auto-instrumentations
+
 # 1.2.2
 
 fix: resolve ESM compatibility in hookRequire for framework span capture
