@@ -116,6 +116,14 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('memcached')) { const { instrumentMemcached } = require('../instrumentation/memcached'); instrumentMemcached(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('generic-pool')) { const { instrumentGenericPool } = require('../instrumentation/generic-pool'); instrumentGenericPool(this.options || undefined); } } catch {}
 
+      // --- Phase 5 Instrumentations: Frameworks, Utilities & AI ---
+      try { if (this.isInstrumentationEnabled('restify')) { const { instrumentRestify } = require('../instrumentation/restify'); instrumentRestify(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('connect')) { const { instrumentConnect } = require('../instrumentation/connect'); instrumentConnect(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('dataloader')) { const { instrumentDataloader } = require('../instrumentation/dataloader'); instrumentDataloader(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('lru-memoizer')) { const { instrumentLruMemoizer } = require('../instrumentation/lru-memoizer'); instrumentLruMemoizer(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('fs')) { const { instrumentFs } = require('../instrumentation/fs'); instrumentFs(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('openai')) { const { instrumentOpenAI } = require('../instrumentation/openai'); instrumentOpenAI(this.options || undefined); } } catch {}
+
       // --- Runtime Metrics ---
       if (this.options?.runtimeMetrics !== false && this.transport) {
         try {
