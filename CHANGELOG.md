@@ -1,3 +1,7 @@
+# 1.3.1
+
+feat: add support for aws lambda extension layer
+
 # 1.3.0
 
 feat: AI SDK instrumentation — Anthropic, Google Gemini (generative-ai + Vertex AI), Azure OpenAI, Cohere, Mistral
