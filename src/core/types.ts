@@ -18,13 +18,17 @@ export interface SenzorOptions {
   ignoreFrameworkSpanTypes?: string[];
   debug?: boolean;
   autoLogs?: boolean;
+  /** Enable runtime metrics collection (event loop, GC, heap). Default: true */
+  runtimeMetrics?: boolean;
+  /** Runtime metrics collection interval in milliseconds. Default: 15000 */
+  runtimeMetricsInterval?: number;
 }
 
 export interface Span {
   spanId: string;
   parentSpanId?: string;
   name: string;
-  type: 'db' | 'http' | 'function' | 'custom';
+  type: 'db' | 'http' | 'function' | 'custom' | 'rpc' | 'messaging' | 'dns' | 'net';
   startTime: number;
   duration: number;
   status?: number;

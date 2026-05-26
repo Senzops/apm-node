@@ -1,10 +1,12 @@
 import { SENZOR_INTERNAL_HEADER } from '../utils/internal';
 import { SenzorOptions, Trace, TaskRun, SenzorError, SenzorLog } from './types';
+import type { RuntimeMetricsPayload } from '../instrumentation/runtime';
 
 interface ApmPayload {
   traces: Trace[];
   errors: SenzorError[];
   logs: SenzorLog[];
+  runtimeMetrics?: RuntimeMetricsPayload[];
 }
 
 interface TaskPayload {
@@ -17,6 +19,7 @@ export class Transport {
   private traceQueue: Trace[] = [];
   private apmErrorQueue: SenzorError[] = [];
   private apmLogQueue: SenzorLog[] = [];
+  private runtimeMetricsQueue: RuntimeMetricsPayload[] = [];
 
   private taskQueue: TaskRun[] = [];
   private taskErrorQueue: SenzorError[] = [];
@@ -89,6 +92,11 @@ export class Transport {
     this.checkFlush();
   }
 
+  public addRuntimeMetrics(payload: RuntimeMetricsPayload) {
+    this.enqueue(this.runtimeMetricsQueue, payload);
+    // Runtime metrics don't trigger immediate flush — they ride the next timer
+  }
+
   private enqueue<T>(queue: T[], item: T) {
     this.ensureTimer();
     queue.push(item);
@@ -130,11 +138,16 @@ export class Transport {
   }
 
   private takeApmPayload(): ApmPayload {
-    const payload = {
+    const payload: ApmPayload = {
       traces: this.traceQueue,
       errors: this.apmErrorQueue,
-      logs: this.apmLogQueue
+      logs: this.apmLogQueue,
     };
+
+    if (this.runtimeMetricsQueue.length > 0) {
+      payload.runtimeMetrics = this.runtimeMetricsQueue;
+      this.runtimeMetricsQueue = [];
+    }
 
     this.traceQueue = [];
     this.apmErrorQueue = [];
@@ -159,6 +172,9 @@ export class Transport {
     this.prependWithLimit(this.apmLogQueue, payload.logs);
     this.prependWithLimit(this.apmErrorQueue, payload.errors);
     this.prependWithLimit(this.traceQueue, payload.traces);
+    if (payload.runtimeMetrics) {
+      this.prependWithLimit(this.runtimeMetricsQueue, payload.runtimeMetrics);
+    }
   }
 
   private restoreTaskPayload(payload: TaskPayload) {
@@ -171,7 +187,8 @@ export class Transport {
     return (
       payload.traces.length > 0 ||
       payload.errors.length > 0 ||
-      payload.logs.length > 0
+      payload.logs.length > 0 ||
+      (payload.runtimeMetrics?.length ?? 0) > 0
     );
   }
 

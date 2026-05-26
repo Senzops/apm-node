@@ -49,7 +49,12 @@ const options = {
   captureLifecycleHookSpans:
     getEnv('SENZOR_CAPTURE_LIFECYCLE_HOOK_SPANS') === 'false'
       ? false
-      : undefined
+      : undefined,
+  runtimeMetrics:
+    getEnv('SENZOR_RUNTIME_METRICS') === 'false'
+      ? false
+      : undefined,
+  runtimeMetricsInterval: numberFromEnv(getEnv('SENZOR_RUNTIME_METRICS_INTERVAL')),
 };
 
 if (apiKey) {

@@ -7,6 +7,7 @@ import { parseTraceparent } from '../utils/traceContext';
 import { generateSpanId, generateTraceId } from '../utils/ids';
 import { sanitizeAttributes } from './sanitizer';
 import { startCapturedSpan } from '../instrumentation/span';
+import { RuntimeMetricsCollector } from '../instrumentation/runtime';
 
 // Memory-safe JSON stringifier to handle cyclical objects 
 // (like Express 'req' objects) passed into console.log
@@ -25,6 +26,7 @@ export class SenzorClient {
   private transport: Transport | null = null;
   private options: SenzorOptions | null = null;
   private isInstrumented = false;
+  private runtimeMetricsCollector: RuntimeMetricsCollector | null = null;
 
   public preload(options: Partial<SenzorOptions> = {}) {
     const endpoint = options.endpoint || 'https://api.senzor.dev/api/ingest/apm';
@@ -87,6 +89,25 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('redis')) { const { instrumentRedis } = require('../instrumentation/redis'); instrumentRedis(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('bullmq')) { const { instrumentBullMQ } = require('../instrumentation/bullmq'); instrumentBullMQ(this, debug); } } catch {}
       try { if (this.isInstrumentationEnabled('cron')) { const { instrumentNodeCron } = require('../instrumentation/cron'); instrumentNodeCron(this, debug); } } catch {}
+
+      // --- Phase 1 Instrumentations ---
+      try { if (this.isInstrumentationEnabled('grpc')) { const { instrumentGrpc } = require('../instrumentation/grpc'); instrumentGrpc(this, this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('graphql')) { const { instrumentGraphQL } = require('../instrumentation/graphql'); instrumentGraphQL(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('dns')) { const { instrumentDns } = require('../instrumentation/dns'); instrumentDns(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('net')) { const { instrumentNet } = require('../instrumentation/net'); instrumentNet(this.options || undefined); } } catch {}
+
+      // --- Runtime Metrics ---
+      if (this.options?.runtimeMetrics !== false && this.transport) {
+        try {
+          this.runtimeMetricsCollector = new RuntimeMetricsCollector({
+            interval: this.options?.runtimeMetricsInterval ?? 15000,
+            onMetrics: (payload) => {
+              this.transport?.addRuntimeMetrics(payload);
+            },
+          });
+          this.runtimeMetricsCollector.start();
+        } catch {}
+      }
     }
 
     this.isInstrumented = true;

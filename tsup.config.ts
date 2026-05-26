@@ -1,9 +1,9 @@
 import { defineConfig } from 'tsup';
 
 const NODE_BUILTINS = [
-  'http', 'https', 'url', 'net', 'module', 'crypto', 'async_hooks',
-  'node:http', 'node:https', 'node:url', 'node:net', 'node:module',
-  'node:crypto', 'node:async_hooks'
+  'http', 'https', 'url', 'net', 'dns', 'module', 'crypto', 'async_hooks', 'perf_hooks',
+  'node:http', 'node:https', 'node:url', 'node:net', 'node:dns', 'node:module',
+  'node:crypto', 'node:async_hooks', 'node:perf_hooks'
 ];
 
 export default defineConfig([
