@@ -57,6 +57,130 @@ const SERVICE_NAME_MAP: Record<string, string> = {
   BedrockRuntimeClient: 'BedrockRuntime',
 };
 
+// ---------------------------------------------------------------------------
+// Bedrock Runtime — GenAI attribute extraction
+// ---------------------------------------------------------------------------
+
+/** Bedrock model ID patterns for gen_ai.system mapping. */
+const BEDROCK_SYSTEM_MAP: Record<string, string> = {
+  anthropic: 'anthropic',
+  amazon: 'aws_bedrock',
+  meta: 'meta',
+  cohere: 'cohere',
+  mistral: 'mistral',
+  ai21: 'ai21',
+  stability: 'stability',
+};
+
+const getBedrockSystem = (modelId: string | undefined): string => {
+  if (!modelId) return 'aws_bedrock';
+  const provider = modelId.split('.')[0]?.toLowerCase();
+  return BEDROCK_SYSTEM_MAP[provider] || 'aws_bedrock';
+};
+
+/** Extract Bedrock-specific attributes from InvokeModel / InvokeModelWithResponseStream commands. */
+const extractBedrockAttributes = (command: any, response: any): Record<string, any> => {
+  const meta: Record<string, any> = {};
+  const input = command?.input;
+  if (!input) return meta;
+
+  const modelId = input.modelId;
+  if (modelId) {
+    meta['gen_ai.system'] = getBedrockSystem(modelId);
+    meta['gen_ai.request.model'] = modelId;
+  }
+
+  // Try to parse the response body for token usage
+  // Bedrock responses are in the 'body' field as a Uint8Array or string
+  try {
+    let bodyStr: string | undefined;
+    if (response?.body) {
+      if (typeof response.body === 'string') {
+        bodyStr = response.body;
+      } else if (response.body instanceof Uint8Array) {
+        bodyStr = new TextDecoder().decode(response.body);
+      } else if (Buffer.isBuffer(response.body)) {
+        bodyStr = response.body.toString('utf-8');
+      }
+    }
+
+    if (bodyStr) {
+      const parsed = JSON.parse(bodyStr);
+
+      // Anthropic Messages API format
+      if (parsed.usage) {
+        if (parsed.usage.input_tokens !== undefined) {
+          meta['gen_ai.usage.input_tokens'] = parsed.usage.input_tokens;
+        }
+        if (parsed.usage.output_tokens !== undefined) {
+          meta['gen_ai.usage.output_tokens'] = parsed.usage.output_tokens;
+        }
+      }
+
+      // Amazon Titan format
+      if (parsed.inputTextTokenCount !== undefined) {
+        meta['gen_ai.usage.input_tokens'] = meta['gen_ai.usage.input_tokens'] || parsed.inputTextTokenCount;
+      }
+      if (parsed.results?.[0]?.tokenCount !== undefined) {
+        meta['gen_ai.usage.output_tokens'] = meta['gen_ai.usage.output_tokens'] || parsed.results[0].tokenCount;
+      }
+
+      // Cohere format
+      if (parsed.meta?.billed_units) {
+        meta['gen_ai.usage.input_tokens'] = meta['gen_ai.usage.input_tokens'] || parsed.meta.billed_units.input_tokens;
+        meta['gen_ai.usage.output_tokens'] = meta['gen_ai.usage.output_tokens'] || parsed.meta.billed_units.output_tokens;
+      }
+
+      // Stop reason / finish reason
+      if (parsed.stop_reason) meta['gen_ai.response.finish_reason'] = parsed.stop_reason;
+      if (parsed.completionReason) meta['gen_ai.response.finish_reason'] = parsed.completionReason;
+    }
+  } catch {
+    // Body parsing is best-effort — the span still captures the Bedrock call
+  }
+
+  return meta;
+};
+
+/** Check if a command is a Bedrock model invocation. */
+const isBedrockInvocation = (operationName: string): boolean =>
+  operationName === 'InvokeModel' ||
+  operationName === 'InvokeModelWithResponseStream' ||
+  operationName === 'Converse' ||
+  operationName === 'ConverseStream';
+
+/** Extract Bedrock Converse API attributes. */
+const extractBedrockConverseAttributes = (command: any, response: any): Record<string, any> => {
+  const meta: Record<string, any> = {};
+  const input = command?.input;
+  if (!input) return meta;
+
+  const modelId = input.modelId;
+  if (modelId) {
+    meta['gen_ai.system'] = getBedrockSystem(modelId);
+    meta['gen_ai.request.model'] = modelId;
+  }
+
+  // Converse API returns usage directly in the response object
+  if (response?.usage) {
+    if (response.usage.inputTokens !== undefined) {
+      meta['gen_ai.usage.input_tokens'] = response.usage.inputTokens;
+    }
+    if (response.usage.outputTokens !== undefined) {
+      meta['gen_ai.usage.output_tokens'] = response.usage.outputTokens;
+    }
+    if (response.usage.totalTokens !== undefined) {
+      meta['gen_ai.usage.total_tokens'] = response.usage.totalTokens;
+    }
+  }
+
+  if (response?.stopReason) {
+    meta['gen_ai.response.finish_reason'] = response.stopReason;
+  }
+
+  return meta;
+};
+
 /** Extract service name from client instance or command. */
 const getServiceName = (client: any): string => {
   // Try constructor name mapping
@@ -160,13 +284,24 @@ const patchClientSend = (clientProto: any, options?: SenzorOptions) => {
                   const statusCode = response?.$metadata?.httpStatusCode;
                   const requestId = response?.$metadata?.requestId;
 
+                  const endMeta: Record<string, any> = {
+                    'aws.request_id': requestId,
+                    'aws.region': (span as any).__awsRegion,
+                    'http.response.status_code': statusCode,
+                  };
+
+                  // Bedrock GenAI attribute extraction
+                  if (isBedrockInvocation(operationName)) {
+                    const op = operationName;
+                    const bedrockMeta = (op === 'Converse' || op === 'ConverseStream')
+                      ? extractBedrockConverseAttributes(command, response)
+                      : extractBedrockAttributes(command, response);
+                    Object.assign(endMeta, bedrockMeta);
+                  }
+
                   span.end(
                     statusCode && statusCode >= 400 ? statusCode : 0,
-                    {
-                      'aws.request_id': requestId,
-                      'aws.region': (span as any).__awsRegion,
-                      'http.response.status_code': statusCode,
-                    }
+                    endMeta
                   );
 
                   return response;

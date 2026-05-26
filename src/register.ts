@@ -19,13 +19,27 @@ const endpoint =
   getEnv('SENZOR_ENDPOINT') ||
   getEnv('SENZOR_APM_ENDPOINT');
 
+// ---------------------------------------------------------------------------
+// Lambda environment auto-detection
+//
+// When running inside AWS Lambda, the execution model differs fundamentally
+// from long-running servers:
+//   - Runtime metrics (event loop, GC, heap) are meaningless per-invocation
+//   - Interval-based flushing wastes resources between frozen invocations
+//   - Batch size should be small since each invocation is short-lived
+//
+// We detect Lambda via the AWS_LAMBDA_FUNCTION_NAME env var (always set by
+// the Lambda runtime) and auto-configure optimal defaults.
+// ---------------------------------------------------------------------------
+const isLambda = !!getEnv('AWS_LAMBDA_FUNCTION_NAME');
+
 const options = {
   apiKey: apiKey || '',
   endpoint,
   debug: truthy(getEnv('SENZOR_DEBUG')),
   autoLogs: getEnv('SENZOR_AUTO_LOGS') === 'false' ? false : undefined,
-  batchSize: numberFromEnv(getEnv('SENZOR_BATCH_SIZE')),
-  flushInterval: numberFromEnv(getEnv('SENZOR_FLUSH_INTERVAL')),
+  batchSize: numberFromEnv(getEnv('SENZOR_BATCH_SIZE')) ?? (isLambda ? 10 : undefined),
+  flushInterval: numberFromEnv(getEnv('SENZOR_FLUSH_INTERVAL')) ?? (isLambda ? 0 : undefined),
   flushTimeoutMs: numberFromEnv(getEnv('SENZOR_FLUSH_TIMEOUT_MS')),
   maxQueueSize: numberFromEnv(getEnv('SENZOR_MAX_QUEUE_SIZE')),
   maxSpansPerTrace: numberFromEnv(getEnv('SENZOR_MAX_SPANS_PER_TRACE')),
@@ -51,7 +65,7 @@ const options = {
       ? false
       : undefined,
   runtimeMetrics:
-    getEnv('SENZOR_RUNTIME_METRICS') === 'false'
+    getEnv('SENZOR_RUNTIME_METRICS') === 'false' || isLambda
       ? false
       : undefined,
   runtimeMetricsInterval: numberFromEnv(getEnv('SENZOR_RUNTIME_METRICS_INTERVAL')),

@@ -3,6 +3,7 @@ import { expressMiddleware, expressErrorHandler } from './middleware/express';
 import { wrapH3 } from './wrappers/h3';
 import { wrapNextRoute, wrapNextPages } from './wrappers/next';
 import { wrapWorker } from './wrappers/worker';
+import { wrapLambda } from './wrappers/lambda';
 import { nitroPlugin } from './wrappers/nitro';
 import { senzorPlugin } from './wrappers/fastify';
 import { SenzorOptions } from './core/types';
@@ -35,6 +36,9 @@ const Senzor = {
 
   // Cloudflare Workers
   worker: wrapWorker,
+
+  // AWS Lambda
+  wrapLambda,
 
   // Nitro / Nuxt
   nitroPlugin

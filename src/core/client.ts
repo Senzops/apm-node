@@ -124,6 +124,14 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('fs')) { const { instrumentFs } = require('../instrumentation/fs'); instrumentFs(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('openai')) { const { instrumentOpenAI } = require('../instrumentation/openai'); instrumentOpenAI(this.options || undefined); } } catch {}
 
+      // --- Phase 6 Instrumentations: AI SDKs & Firebase ---
+      try { if (this.isInstrumentationEnabled('anthropic')) { const { instrumentAnthropic } = require('../instrumentation/anthropic'); instrumentAnthropic(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('google-genai')) { const { instrumentGoogleGenAI } = require('../instrumentation/google-genai'); instrumentGoogleGenAI(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('azure-openai')) { const { instrumentAzureOpenAI } = require('../instrumentation/azure-openai'); instrumentAzureOpenAI(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('cohere')) { const { instrumentCohere } = require('../instrumentation/cohere'); instrumentCohere(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mistral')) { const { instrumentMistral } = require('../instrumentation/mistral'); instrumentMistral(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('firebase')) { const { instrumentFirebase } = require('../instrumentation/firebase'); instrumentFirebase(this.options || undefined); } } catch {}
+
       // --- Runtime Metrics ---
       if (this.options?.runtimeMetrics !== false && this.transport) {
         try {
