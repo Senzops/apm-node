@@ -1,3 +1,7 @@
+# 1.3.2
+
+fix: package stability issues
+
 # 1.3.1
 
 feat: add support for aws lambda extension layer
