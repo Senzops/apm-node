@@ -6,54 +6,50 @@ interface IStorage<T> {
 }
 
 /**
- * Async-safe fallback when AsyncLocalStorage is unavailable.
+ * Per-callback context tracking for runtimes without AsyncLocalStorage.
  *
- * Not concurrency-safe across truly parallel requests in a single isolate,
- * but correct for sequential and async/await patterns (e.g. Cloudflare Workers
- * where each request gets its own execution context).
+ * Uses a stack instead of a single variable so overlapping synchronous
+ * Context.run() calls (e.g. nested middleware) don't clobber each other.
+ * Async context is propagated by chaining onto the returned thenable.
+ *
+ * NOT safe for truly concurrent requests in a single isolate — use
+ * AsyncLocalStorage for that. This exists as a last-resort fallback.
  */
 class NaiveStorage<T> implements IStorage<T> {
-  private store: T | undefined;
+  private stack: T[] = [];
 
   run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R {
-    const prev = this.store;
-    this.store = store;
+    this.stack.push(store);
 
     let result: R;
     try {
       result = callback(...args);
     } catch (err) {
-      this.store = prev;
+      this.stack.pop();
       throw err;
     }
 
-    // If the callback returned a thenable (async handler), defer the restore
-    // until the promise settles so Context.current() works across awaits.
     if (result != null && typeof (result as any).then === 'function') {
       const promise = (result as any).then(
-        (val: any) => { this.store = prev; return val; },
-        (err: any) => { this.store = prev; throw err; }
+        (val: any) => { this.stack.pop(); return val; },
+        (err: any) => { this.stack.pop(); throw err; }
       );
       return promise as R;
     }
 
-    // Sync callback — restore immediately.
-    this.store = prev;
+    this.stack.pop();
     return result;
   }
 
   getStore(): T | undefined {
-    return this.store;
+    return this.stack.length > 0 ? this.stack[this.stack.length - 1] : undefined;
   }
 }
 
 /**
  * Resolve the best available async context storage.
  *
- * Uses lazy re-resolution: if the initial attempt (at module evaluation time)
- * falls back to NaiveStorage, subsequent calls to resolveStorage() will retry.
- * This handles runtimes where AsyncLocalStorage becomes available after module
- * init (e.g. some Workers configurations).
+ * Tries multiple resolution strategies to cover CJS, ESM, and edge runtimes.
  */
 const tryResolveALS = <T>(): IStorage<T> | null => {
   // 1. Check globalThis (Cloudflare Workers nodejs_compat_v2, Bun, Deno)
@@ -72,6 +68,17 @@ const tryResolveALS = <T>(): IStorage<T> | null => {
   try {
     if (typeof require !== 'undefined') {
       const mod = require('async_hooks');
+      if (mod?.AsyncLocalStorage) return new mod.AsyncLocalStorage();
+    }
+  } catch {}
+
+  // 3. ESM fallback: indirect require via Function constructor
+  // In bundled ESM (tsup/esbuild), `require` is shimmed and steps 1-2 work.
+  // This step handles raw ESM where require is truly unavailable.
+  try {
+    if (typeof require === 'undefined' && typeof process !== 'undefined') {
+      const fn = new Function('try { var m = require("module"); return m.createRequire(process.cwd() + "/")("node:async_hooks"); } catch(e) { return null; }');
+      const mod = fn();
       if (mod?.AsyncLocalStorage) return new mod.AsyncLocalStorage();
     }
   } catch {}

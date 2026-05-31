@@ -9,14 +9,20 @@ import { sanitizeAttributes } from './sanitizer';
 import { startCapturedSpan } from '../instrumentation/span';
 import { RuntimeMetricsCollector } from '../instrumentation/runtime';
 
-// Memory-safe JSON stringifier to handle cyclical objects 
-// (like Express 'req' objects) passed into console.log
+const MAX_STRINGIFY_LENGTH = 8192;
+
 const safeStringify = (obj: any): string => {
-  const cache = new Set();
-  return JSON.stringify(obj, (key, value) => {
+  const seen = new Set();
+  let length = 0;
+  return JSON.stringify(obj, function (_key, value) {
+    if (length > MAX_STRINGIFY_LENGTH) return undefined;
+    if (typeof value === 'string') {
+      length += value.length;
+      if (value.length > 2048) return value.slice(0, 2048) + '...[truncated]';
+    }
     if (typeof value === 'object' && value !== null) {
-      if (cache.has(value)) return '[Circular]';
-      cache.add(value);
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
     }
     return value;
   });
@@ -299,14 +305,37 @@ export class SenzorClient {
       }
     };
 
+    const flushAndExit = (code: number) => {
+      if (this.transport) {
+        const timeout = setTimeout(() => process.exit(code), 2000);
+        if (typeof timeout.unref === 'function') timeout.unref();
+        this.transport.flush().then(
+          () => process.exit(code),
+          () => process.exit(code)
+        );
+      } else {
+        process.exit(code);
+      }
+    };
+
+    // Monitor-only: captures for telemetry without altering default crash behavior.
+    // Node.js will still print the stack and exit after this listener runs.
     process.on('uncaughtExceptionMonitor', (error) => safeCapture(error, { type: 'uncaughtExceptionMonitor', severity: 'fatal' }));
-    process.on('uncaughtException', (error) => safeCapture(error, { type: 'uncaughtException', severity: 'fatal' }));
+
     process.on('unhandledRejection', (reason) => safeCapture(reason, { type: 'unhandledRejection', severity: 'error' }));
     process.on('warning', (warning) => safeCapture(warning, { type: 'processWarning', severity: 'warning' }));
-    process.on('multipleResolves', (type, promise, reason) => safeCapture(reason || new Error('Multiple promise resolves'), { type: 'multipleResolves', resolveType: type, severity: 'warning' }));
-    process.on('rejectionHandled', (promise) => { if (this.options?.debug) { try { console.warn('[Senzor] rejectionHandled event detected'); } catch { } } });
-    process.on('SIGTERM', () => safeCapture(new Error('Process received SIGTERM'), { type: 'processSignal', signal: 'SIGTERM' }));
-    process.on('SIGINT', () => safeCapture(new Error('Process received SIGINT'), { type: 'processSignal', signal: 'SIGINT' }));
+
+    let shuttingDown = false;
+
+    const gracefulShutdown = (signal: string, exitCode: number) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      safeCapture(new Error(`Process received ${signal}`), { type: 'processSignal', signal, severity: 'warning' });
+      flushAndExit(exitCode);
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM', 143));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT', 130));
   }
 
   public startTrace<T>(data: Partial<ActiveTrace['data']> & { headers?: any }, next: () => T): T {

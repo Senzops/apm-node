@@ -1,8 +1,8 @@
 type HookFn = (exports: unknown) => unknown | void;
 type HookMap = Map<string, HookFn[]>;
 
-let Module: any;
-let safeRequire: NodeRequire;
+let Module: any = null;
+let safeRequire: NodeRequire | null = null;
 
 try {
   Module = require('module');
@@ -12,6 +12,18 @@ try {
       : process.cwd() + '/'
   );
 } catch {}
+
+// ESM fallback: if native require is unavailable, try to bootstrap via createRequire
+if (!Module || !safeRequire) {
+  try {
+    const nodeModule = (Function('try { return require("module") } catch(e) { return null }'))();
+    if (nodeModule?.createRequire) {
+      Module = nodeModule;
+      const cwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : '/';
+      safeRequire = nodeModule.createRequire(cwd + '/');
+    }
+  } catch {}
+}
 
 const SENZOR_PATCHED = Symbol.for('senzor.require.patched');
 const SENZOR_HOOKS = Symbol.for('senzor.require.hooks');
@@ -57,6 +69,9 @@ function patchLoaderOnce() {
 
   if (mod[SENZOR_PATCHED]) return;
 
+  // Module._load is CJS-specific; in pure ESM runtimes it may not exist
+  if (typeof mod._load !== 'function') return;
+
   const previousLoad = mod._load;
 
   mod._load = function patchedLoad(
@@ -75,6 +90,7 @@ function patchLoaderOnce() {
 }
 
 function patchCached(moduleName: string, hook: HookFn) {
+  if (!safeRequire) return;
   try {
     const resolved = safeRequire.resolve(moduleName);
     const cached = safeRequire.cache?.[resolved];
@@ -86,38 +102,6 @@ function patchCached(moduleName: string, hook: HookFn) {
       }
     }
   } catch { }
-}
-
-function tryRequire(moduleName: string, hook: HookFn) {
-  try {
-    const mod = safeRequire(moduleName);
-    if (mod) {
-      hook(mod);
-    }
-  } catch { }
-}
-
-function retryPatch(moduleName: string, hook: HookFn) {
-  let attempts = 0;
-  const max = 5;
-
-  const timer = setInterval(() => {
-    attempts++;
-
-    try {
-      const mod = safeRequire(moduleName);
-      if (mod) {
-        hook(mod);
-        clearInterval(timer);
-      }
-    } catch { }
-
-    if (attempts >= max) {
-      clearInterval(timer);
-    }
-  }, 200);
-
-  if (typeof timer.unref === 'function') timer.unref();
 }
 
 export const hookRequire = (moduleName: string, onRequire: HookFn) => {
@@ -133,6 +117,4 @@ export const hookRequire = (moduleName: string, onRequire: HookFn) => {
 
   patchLoaderOnce();
   patchCached(moduleName, onRequire);
-  tryRequire(moduleName, onRequire);
-  retryPatch(moduleName, onRequire);
 };

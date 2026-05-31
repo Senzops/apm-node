@@ -70,6 +70,21 @@ const patchRequestLike = (
           return original.apply(this, arguments as any);
         }
 
+        // Skip if the request already has Senzor trace headers injected by
+        // the fetch instrumentation (Node.js fetch delegates to undici internally).
+        const existingHeaders = opts?.headers;
+        if (existingHeaders) {
+          let hasTrace = false;
+          if (typeof Headers !== 'undefined' && existingHeaders instanceof Headers) {
+            hasTrace = existingHeaders.has('x-senzor-trace-id');
+          } else if (Array.isArray(existingHeaders)) {
+            hasTrace = existingHeaders.some(([k]: [string, string]) => String(k).toLowerCase() === 'x-senzor-trace-id');
+          } else if (typeof existingHeaders === 'object') {
+            hasTrace = Object.keys(existingHeaders).some(k => k.toLowerCase() === 'x-senzor-trace-id');
+          }
+          if (hasTrace) return original.apply(this, arguments as any);
+        }
+
         const details = getUrlDetails(input?.origin ? input.origin : input);
         const method = String(opts?.method || 'GET').toUpperCase();
         const span = startCapturedSpan(

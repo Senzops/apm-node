@@ -194,7 +194,7 @@ const patchChannel = (channelProto: any, options?: SenzorOptions) => {
       function patchedConsume(
         this: any,
         queue: string,
-        callback: (msg: any) => void,
+        callback: (msg: any) => any,
         consumeOptions?: any
       ) {
         if (typeof callback !== 'function') {

@@ -15,6 +15,9 @@ interface TaskPayload {
   logs: SenzorLog[];
 }
 
+const MAX_BACKOFF_MS = 60_000;
+const BASE_BACKOFF_MS = 1_000;
+
 export class Transport {
   private traceQueue: Trace[] = [];
   private apmErrorQueue: SenzorError[] = [];
@@ -33,6 +36,9 @@ export class Transport {
   private flushAgain = false;
   private droppedItems = 0;
 
+  private consecutiveFailures = 0;
+  private backoffUntil = 0;
+
   constructor(private config: SenzorOptions) {
     const baseEndpoint = config.endpoint || 'https://api.senzor.dev';
     this.apmEndpoint = baseEndpoint.includes('/api/ingest')
@@ -41,10 +47,6 @@ export class Transport {
     this.taskEndpoint = baseEndpoint.includes('/api/ingest')
       ? baseEndpoint.replace('/apm', '/task')
       : `${baseEndpoint}/api/ingest/task`;
-
-    // Timer and shutdown flush are deferred to first enqueue.
-    // Cloudflare Workers forbids setInterval / process access in global scope,
-    // and init() may be called at module evaluation time (e.g. Nitro plugins).
   }
 
   private ensureTimer() {
@@ -94,7 +96,6 @@ export class Transport {
 
   public addRuntimeMetrics(payload: RuntimeMetricsPayload) {
     this.enqueue(this.runtimeMetricsQueue, payload);
-    // Runtime metrics don't trigger immediate flush — they ride the next timer
   }
 
   private enqueue<T>(queue: T[], item: T) {
@@ -236,6 +237,8 @@ export class Transport {
       return;
     }
 
+    if (Date.now() < this.backoffUntil) return;
+
     this.isFlushing = true;
 
     try {
@@ -271,6 +274,21 @@ export class Transport {
           (result) => result.status === 'rejected'
         );
 
+        if (failures.length > 0) {
+          this.consecutiveFailures++;
+          const delay = Math.min(
+            BASE_BACKOFF_MS * Math.pow(2, this.consecutiveFailures - 1),
+            MAX_BACKOFF_MS
+          );
+          this.backoffUntil = Date.now() + delay;
+          if (this.config.debug) {
+            console.warn(`[Senzor] Flush failed (attempt ${this.consecutiveFailures}), backing off ${delay}ms`);
+          }
+        } else {
+          this.consecutiveFailures = 0;
+          this.backoffUntil = 0;
+        }
+
         if (this.config.debug) {
           console.log(
             `[Senzor] Flushed: APM(${apmPayload.traces.length} traces, ${apmPayload.logs.length} logs), Task(${taskPayload.runs.length} runs, ${taskPayload.logs.length} logs), failures=${failures.length}, dropped=${this.droppedItems}`
@@ -296,10 +314,10 @@ export class Transport {
       enumerable: false
     });
 
-    const flushSyncBestEffort = () => {
+    const flushBestEffort = () => {
       void this.flush();
     };
 
-    process.once('beforeExit', flushSyncBestEffort);
+    process.once('beforeExit', flushBestEffort);
   }
 }
