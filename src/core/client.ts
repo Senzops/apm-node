@@ -580,4 +580,28 @@ export class SenzorClient {
   public async flush() { if (this.transport) await this.transport.flush(); }
 }
 
-export const client = new SenzorClient();
+// ---------------------------------------------------------------------------
+// Singleton via globalThis
+//
+// register.js and index.js are separate bundles, each with their own copy of
+// this module. Without a shared instance, register.js patches HTTP with its
+// client (Client A), but the user's Senzor.init() sets the transport on
+// index.js's client (Client B). Traces go to Client A (no transport) → lost.
+//
+// Using Symbol.for() ensures the SAME symbol across bundles. The first bundle
+// to load creates the instance; subsequent bundles reuse it.
+// ---------------------------------------------------------------------------
+const SENZOR_CLIENT = Symbol.for('senzor.client.singleton');
+
+const existingClient = (globalThis as any)[SENZOR_CLIENT] as SenzorClient | undefined;
+
+export const client: SenzorClient = existingClient || new SenzorClient();
+
+if (!existingClient) {
+  Object.defineProperty(globalThis, SENZOR_CLIENT, {
+    value: client,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+}
