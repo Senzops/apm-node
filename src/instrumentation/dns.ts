@@ -158,9 +158,11 @@ const patchDnsPromisesMethod = (
 // ---------------------------------------------------------------------------
 
 export const instrumentDns = (options?: SenzorOptions) => {
+  const safeReq = (globalThis as any).__senzorSafeRequire;
+  if (!safeReq) return;
   let dns: any;
   try {
-    dns = require('dns');
+    dns = safeReq('dns');
   } catch {
     return;
   }

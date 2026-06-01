@@ -178,9 +178,11 @@ const patchSocketConnect = (netModule: any, options?: SenzorOptions) => {
 // ---------------------------------------------------------------------------
 
 export const instrumentNet = (options?: SenzorOptions) => {
+  const safeReq = (globalThis as any).__senzorSafeRequire;
+  if (!safeReq) return;
   let net: any;
   try {
-    net = require('net');
+    net = safeReq('net');
   } catch {
     return;
   }

@@ -9,6 +9,50 @@ import { sanitizeAttributes } from './sanitizer';
 import { startCapturedSpan } from '../instrumentation/span';
 import { RuntimeMetricsCollector } from '../instrumentation/runtime';
 
+// Static imports of all instrumentations for reliable Node.js bundling
+import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
+import { instrumentExpress } from '../instrumentation/express';
+import { instrumentFastify } from '../instrumentation/fastify';
+import { instrumentKoa } from '../instrumentation/koa';
+import { instrumentUndici } from '../instrumentation/undici';
+import { instrumentMongo } from '../instrumentation/mongo';
+import { instrumentMongoose } from '../instrumentation/mongoose';
+import { instrumentPg } from '../instrumentation/pg';
+import { instrumentMysql } from '../instrumentation/mysql';
+import { instrumentRedis } from '../instrumentation/redis';
+import { instrumentBullMQ } from '../instrumentation/bullmq';
+import { instrumentNodeCron } from '../instrumentation/cron';
+import { instrumentGrpc } from '../instrumentation/grpc';
+import { instrumentGraphQL } from '../instrumentation/graphql';
+import { instrumentDns } from '../instrumentation/dns';
+import { instrumentNet } from '../instrumentation/net';
+import { instrumentKafka } from '../instrumentation/kafka';
+import { instrumentAmqplib } from '../instrumentation/amqplib';
+import { instrumentSocketIO } from '../instrumentation/socketio';
+import { instrumentNestJS } from '../instrumentation/nestjs';
+import { instrumentHapi } from '../instrumentation/hapi';
+import { instrumentPino } from '../instrumentation/pino';
+import { instrumentWinston } from '../instrumentation/winston';
+import { instrumentBunyan } from '../instrumentation/bunyan';
+import { instrumentAwsSdk } from '../instrumentation/aws-sdk';
+import { instrumentKnex } from '../instrumentation/knex';
+import { instrumentTedious } from '../instrumentation/tedious';
+import { instrumentCassandra } from '../instrumentation/cassandra';
+import { instrumentMemcached } from '../instrumentation/memcached';
+import { instrumentGenericPool } from '../instrumentation/generic-pool';
+import { instrumentRestify } from '../instrumentation/restify';
+import { instrumentConnect } from '../instrumentation/connect';
+import { instrumentDataloader } from '../instrumentation/dataloader';
+import { instrumentLruMemoizer } from '../instrumentation/lru-memoizer';
+import { instrumentFs } from '../instrumentation/fs';
+import { instrumentOpenAI } from '../instrumentation/openai';
+import { instrumentAnthropic } from '../instrumentation/anthropic';
+import { instrumentGoogleGenAI } from '../instrumentation/google-genai';
+import { instrumentAzureOpenAI } from '../instrumentation/azure-openai';
+import { instrumentCohere } from '../instrumentation/cohere';
+import { instrumentMistral } from '../instrumentation/mistral';
+import { instrumentFirebase } from '../instrumentation/firebase';
+
 const MAX_STRINGIFY_LENGTH = 8192;
 
 const safeStringify = (obj: any): string => {
@@ -76,67 +120,66 @@ export class SenzorClient {
     // Fetch instrumentation works on all runtimes (Workers, Node, Bun, Deno)
     try {
       if (this.isInstrumentationEnabled('fetch')) {
-        const { instrumentFetch } = require('../instrumentation/http');
         instrumentFetch(endpoint, this.options || undefined);
       }
     } catch {}
 
     // Node-only instrumentations: http, module hooking, db drivers, etc.
     if (isNode()) {
-      try { if (this.isInstrumentationEnabled('http')) { const { instrumentHttp } = require('../instrumentation/http'); instrumentHttp(this, endpoint, this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('express')) { const { instrumentExpress } = require('../instrumentation/express'); instrumentExpress(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('fastify')) { const { instrumentFastify } = require('../instrumentation/fastify'); instrumentFastify(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('koa')) { const { instrumentKoa } = require('../instrumentation/koa'); instrumentKoa(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('undici')) { const { instrumentUndici } = require('../instrumentation/undici'); instrumentUndici(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('mongo')) { const { instrumentMongo } = require('../instrumentation/mongo'); instrumentMongo(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('mongoose')) { const { instrumentMongoose } = require('../instrumentation/mongoose'); instrumentMongoose(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('pg')) { const { instrumentPg } = require('../instrumentation/pg'); instrumentPg(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('mysql')) { const { instrumentMysql } = require('../instrumentation/mysql'); instrumentMysql(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('redis')) { const { instrumentRedis } = require('../instrumentation/redis'); instrumentRedis(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('bullmq')) { const { instrumentBullMQ } = require('../instrumentation/bullmq'); instrumentBullMQ(this, debug); } } catch {}
-      try { if (this.isInstrumentationEnabled('cron')) { const { instrumentNodeCron } = require('../instrumentation/cron'); instrumentNodeCron(this, debug); } } catch {}
+      try { if (this.isInstrumentationEnabled('http')) { instrumentHttp(this, endpoint, this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('express')) { instrumentExpress(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('fastify')) { instrumentFastify(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('koa')) { instrumentKoa(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('undici')) { instrumentUndici(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mongo')) { instrumentMongo(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mongoose')) { instrumentMongoose(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('pg')) { instrumentPg(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mysql')) { instrumentMysql(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('redis')) { instrumentRedis(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('bullmq')) { instrumentBullMQ(this, debug); } } catch {}
+      try { if (this.isInstrumentationEnabled('cron')) { instrumentNodeCron(this, debug); } } catch {}
 
       // --- Phase 1 Instrumentations ---
-      try { if (this.isInstrumentationEnabled('grpc')) { const { instrumentGrpc } = require('../instrumentation/grpc'); instrumentGrpc(this, this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('graphql')) { const { instrumentGraphQL } = require('../instrumentation/graphql'); instrumentGraphQL(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('dns')) { const { instrumentDns } = require('../instrumentation/dns'); instrumentDns(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('net')) { const { instrumentNet } = require('../instrumentation/net'); instrumentNet(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('grpc')) { instrumentGrpc(this, this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('graphql')) { instrumentGraphQL(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('dns')) { instrumentDns(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('net')) { instrumentNet(this.options || undefined); } } catch {}
 
       // --- Phase 2 Instrumentations: Messaging ---
-      try { if (this.isInstrumentationEnabled('kafka')) { const { instrumentKafka } = require('../instrumentation/kafka'); instrumentKafka(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('amqplib')) { const { instrumentAmqplib } = require('../instrumentation/amqplib'); instrumentAmqplib(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('socketio')) { const { instrumentSocketIO } = require('../instrumentation/socketio'); instrumentSocketIO(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('kafka')) { instrumentKafka(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('amqplib')) { instrumentAmqplib(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('socketio')) { instrumentSocketIO(this.options || undefined); } } catch {}
 
       // --- Phase 3 Instrumentations: Frameworks & Log Correlation ---
-      try { if (this.isInstrumentationEnabled('nestjs')) { const { instrumentNestJS } = require('../instrumentation/nestjs'); instrumentNestJS(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('hapi')) { const { instrumentHapi } = require('../instrumentation/hapi'); instrumentHapi(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('pino')) { const { instrumentPino } = require('../instrumentation/pino'); instrumentPino(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('winston')) { const { instrumentWinston } = require('../instrumentation/winston'); instrumentWinston(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('bunyan')) { const { instrumentBunyan } = require('../instrumentation/bunyan'); instrumentBunyan(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('nestjs')) { instrumentNestJS(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('hapi')) { instrumentHapi(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('pino')) { instrumentPino(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('winston')) { instrumentWinston(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('bunyan')) { instrumentBunyan(this.options || undefined); } } catch {}
 
       // --- Phase 4 Instrumentations: Cloud & Database ---
-      try { if (this.isInstrumentationEnabled('aws-sdk')) { const { instrumentAwsSdk } = require('../instrumentation/aws-sdk'); instrumentAwsSdk(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('knex')) { const { instrumentKnex } = require('../instrumentation/knex'); instrumentKnex(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('tedious')) { const { instrumentTedious } = require('../instrumentation/tedious'); instrumentTedious(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('cassandra')) { const { instrumentCassandra } = require('../instrumentation/cassandra'); instrumentCassandra(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('memcached')) { const { instrumentMemcached } = require('../instrumentation/memcached'); instrumentMemcached(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('generic-pool')) { const { instrumentGenericPool } = require('../instrumentation/generic-pool'); instrumentGenericPool(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('aws-sdk')) { instrumentAwsSdk(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('knex')) { instrumentKnex(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('tedious')) { instrumentTedious(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('cassandra')) { instrumentCassandra(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('memcached')) { instrumentMemcached(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('generic-pool')) { instrumentGenericPool(this.options || undefined); } } catch {}
 
       // --- Phase 5 Instrumentations: Frameworks, Utilities & AI ---
-      try { if (this.isInstrumentationEnabled('restify')) { const { instrumentRestify } = require('../instrumentation/restify'); instrumentRestify(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('connect')) { const { instrumentConnect } = require('../instrumentation/connect'); instrumentConnect(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('dataloader')) { const { instrumentDataloader } = require('../instrumentation/dataloader'); instrumentDataloader(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('lru-memoizer')) { const { instrumentLruMemoizer } = require('../instrumentation/lru-memoizer'); instrumentLruMemoizer(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('fs')) { const { instrumentFs } = require('../instrumentation/fs'); instrumentFs(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('openai')) { const { instrumentOpenAI } = require('../instrumentation/openai'); instrumentOpenAI(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('restify')) { instrumentRestify(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('connect')) { instrumentConnect(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('dataloader')) { instrumentDataloader(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('lru-memoizer')) { instrumentLruMemoizer(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('fs')) { instrumentFs(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('openai')) { instrumentOpenAI(this.options || undefined); } } catch {}
 
       // --- Phase 6 Instrumentations: AI SDKs & Firebase ---
-      try { if (this.isInstrumentationEnabled('anthropic')) { const { instrumentAnthropic } = require('../instrumentation/anthropic'); instrumentAnthropic(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('google-genai')) { const { instrumentGoogleGenAI } = require('../instrumentation/google-genai'); instrumentGoogleGenAI(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('azure-openai')) { const { instrumentAzureOpenAI } = require('../instrumentation/azure-openai'); instrumentAzureOpenAI(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('cohere')) { const { instrumentCohere } = require('../instrumentation/cohere'); instrumentCohere(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('mistral')) { const { instrumentMistral } = require('../instrumentation/mistral'); instrumentMistral(this.options || undefined); } } catch {}
-      try { if (this.isInstrumentationEnabled('firebase')) { const { instrumentFirebase } = require('../instrumentation/firebase'); instrumentFirebase(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('anthropic')) { instrumentAnthropic(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('google-genai')) { instrumentGoogleGenAI(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('azure-openai')) { instrumentAzureOpenAI(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('cohere')) { instrumentCohere(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mistral')) { instrumentMistral(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('firebase')) { instrumentFirebase(this.options || undefined); } } catch {}
 
       // --- Runtime Metrics ---
       if (this.options?.runtimeMetrics !== false && this.transport) {

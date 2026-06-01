@@ -81,6 +81,16 @@ const GC_KINDS: Record<number, keyof Pick<GcStats, 'majorCount' | 'minorCount' |
   8: 'weakCallbackCount',
 };
 
+const getPerfHooks = (): any => {
+  const safeReq = (globalThis as any).__senzorSafeRequire;
+  if (safeReq) {
+    try {
+      return safeReq('perf_hooks');
+    } catch {}
+  }
+  return null;
+};
+
 class GcObserver {
   private stats: GcStats = {
     totalDurationMs: 0,
@@ -94,7 +104,9 @@ class GcObserver {
 
   start() {
     try {
-      const { PerformanceObserver } = require('perf_hooks');
+      const perfHooks = getPerfHooks();
+      if (!perfHooks) return;
+      const { PerformanceObserver } = perfHooks;
 
       this.observer = new PerformanceObserver((list: any) => {
         for (const entry of list.getEntries()) {
@@ -153,9 +165,12 @@ class EventLoopLagMeter {
 
     // Try to use monitorEventLoopDelay for histogram (Node 12+)
     try {
-      const { monitorEventLoopDelay } = require('perf_hooks');
-      this.monitoringHistogram = monitorEventLoopDelay({ resolution: 20 });
-      this.monitoringHistogram.enable();
+      const perfHooks = getPerfHooks();
+      if (perfHooks) {
+        const { monitorEventLoopDelay } = perfHooks;
+        this.monitoringHistogram = monitorEventLoopDelay({ resolution: 20 });
+        this.monitoringHistogram.enable();
+      }
     } catch { }
   }
 
@@ -210,9 +225,9 @@ class EventLoopUtilization {
 
   start() {
     try {
-      const { performance: perfHooks } = require('perf_hooks');
-      if (typeof perfHooks.eventLoopUtilization === 'function') {
-        this.getELU = () => perfHooks.eventLoopUtilization();
+      const perfHooks = getPerfHooks();
+      if (perfHooks && typeof perfHooks.performance?.eventLoopUtilization === 'function') {
+        this.getELU = () => perfHooks.performance.eventLoopUtilization();
         this.elu1 = this.getELU();
       }
     } catch { }
@@ -222,8 +237,9 @@ class EventLoopUtilization {
     if (!this.getELU || !this.elu1) return undefined;
     try {
       const elu2 = this.getELU();
-      const { performance: perfHooks } = require('perf_hooks');
-      const util = perfHooks.eventLoopUtilization(this.elu1, elu2);
+      const perfHooks = getPerfHooks();
+      if (!perfHooks) return undefined;
+      const util = perfHooks.performance.eventLoopUtilization(this.elu1, elu2);
       this.elu1 = elu2;
       return Math.round(util.utilization * 10000) / 100; // 0-100 with 2 decimal
     } catch {

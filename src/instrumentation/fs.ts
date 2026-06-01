@@ -243,11 +243,13 @@ const patchFs = (fsModule: any, options?: SenzorOptions) => {
 // ---------------------------------------------------------------------------
 
 export const instrumentFs = (options?: SenzorOptions) => {
-  // fs is a Node.js built-in — require it directly
-  try {
-    const fs = require('fs');
-    patchFs(fs, options);
-  } catch { }
+  const safeReq = (globalThis as any).__senzorSafeRequire;
+  if (safeReq) {
+    try {
+      const fs = safeReq('fs');
+      patchFs(fs, options);
+    } catch { }
+  }
 
   // Also hook for any dynamic requires
   hookRequire('fs', (exports: any) => {

@@ -519,11 +519,13 @@ export const instrumentHttp = (
   ingestUrl: string,
   options?: SenzorOptions
 ) => {
+  const safeReq = (globalThis as any).__senzorSafeRequire;
+  if (!safeReq) return;
   let httpMod: any;
   let httpsMod: any;
 
-  try { httpMod = require('http'); } catch { return; }
-  try { httpsMod = require('https'); } catch {}
+  try { httpMod = safeReq('http'); } catch { return; }
+  try { httpsMod = safeReq('https'); } catch {}
 
   if (httpMod?.Server?.prototype) {
     patchIncomingServer(httpMod.Server.prototype, 'http', client, options);

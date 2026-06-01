@@ -1,29 +1,15 @@
+import Module from 'module';
+
 type HookFn = (exports: unknown) => unknown | void;
 type HookMap = Map<string, HookFn[]>;
 
-let Module: any = null;
-let safeRequire: NodeRequire | null = null;
+const safeRequire: NodeRequire = Module.createRequire(
+  typeof __filename !== 'undefined'
+    ? __filename
+    : process.cwd() + '/'
+);
 
-try {
-  Module = require('module');
-  safeRequire = Module.createRequire(
-    typeof __filename !== 'undefined'
-      ? __filename
-      : process.cwd() + '/'
-  );
-} catch {}
-
-// ESM fallback: if native require is unavailable, try to bootstrap via createRequire
-if (!Module || !safeRequire) {
-  try {
-    const nodeModule = (Function('try { return require("module") } catch(e) { return null }'))();
-    if (nodeModule?.createRequire) {
-      Module = nodeModule;
-      const cwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : '/';
-      safeRequire = nodeModule.createRequire(cwd + '/');
-    }
-  } catch {}
-}
+(globalThis as any).__senzorSafeRequire = safeRequire;
 
 const SENZOR_PATCHED = Symbol.for('senzor.require.patched');
 const SENZOR_HOOKS = Symbol.for('senzor.require.hooks');
@@ -104,8 +90,42 @@ function patchCached(moduleName: string, hook: HookFn) {
   } catch { }
 }
 
+function tryRequire(moduleName: string, hook: HookFn) {
+  if (!safeRequire) return;
+  try {
+    const mod = safeRequire(moduleName);
+    if (mod) {
+      hook(mod);
+    }
+  } catch { }
+}
+
+function retryPatch(moduleName: string, hook: HookFn) {
+  if (!safeRequire) return;
+  let attempts = 0;
+  const max = 5;
+
+  const timer = setInterval(() => {
+    attempts++;
+
+    try {
+      const mod = safeRequire!(moduleName);
+      if (mod) {
+        hook(mod);
+        clearInterval(timer);
+      }
+    } catch { }
+
+    if (attempts >= max) {
+      clearInterval(timer);
+    }
+  }, 200);
+
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
 export const hookRequire = (moduleName: string, onRequire: HookFn) => {
-  if (!Module || !safeRequire) return;
+  if (!safeRequire) return;
 
   const registry = getHookRegistry();
 
@@ -117,4 +137,6 @@ export const hookRequire = (moduleName: string, onRequire: HookFn) => {
 
   patchLoaderOnce();
   patchCached(moduleName, onRequire);
+  tryRequire(moduleName, onRequire);
+  retryPatch(moduleName, onRequire);
 };
