@@ -21,25 +21,40 @@ export const patchMethod = (
   if (existingPatches?.has(patchKey)) return false;
 
   const original = current[ORIGINAL] || current;
-  const wrapped = wrapper(current) as WrappedFunction;
+  const rawWrapped = wrapper(current);
+
+  const safeWrapped = rawWrapped as WrappedFunction;
+
   const patches = new Set(existingPatches || []);
   patches.add(patchKey);
 
   try {
-    Object.defineProperty(wrapped, PATCHES, {
+    Object.defineProperty(safeWrapped, PATCHES, {
       value: patches,
       enumerable: false
     });
-    Object.defineProperty(wrapped, ORIGINAL, {
+    Object.defineProperty(safeWrapped, ORIGINAL, {
       value: original,
       enumerable: false
     });
+    Object.defineProperty(safeWrapped, 'length', {
+      value: current.length,
+      configurable: true
+    });
+    if (current.name) {
+      try {
+        Object.defineProperty(safeWrapped, 'name', {
+          value: current.name,
+          configurable: true
+        });
+      } catch {}
+    }
   } catch {
     return false;
   }
 
   try {
-    target[methodName] = wrapped;
+    target[methodName] = safeWrapped;
     return true;
   } catch {
     return false;

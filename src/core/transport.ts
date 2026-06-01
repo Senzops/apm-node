@@ -231,13 +231,13 @@ export class Transport {
     }
   }
 
-  public async flush() {
+  public async flush(force = false) {
     if (this.isFlushing) {
       this.flushAgain = true;
       return;
     }
 
-    if (Date.now() < this.backoffUntil) return;
+    if (!force && Date.now() < this.backoffUntil) return;
 
     this.isFlushing = true;
 

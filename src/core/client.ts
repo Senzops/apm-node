@@ -309,7 +309,7 @@ export class SenzorClient {
       if (this.transport) {
         const timeout = setTimeout(() => process.exit(code), 2000);
         if (typeof timeout.unref === 'function') timeout.unref();
-        this.transport.flush().then(
+        this.transport.flush(true).then(
           () => process.exit(code),
           () => process.exit(code)
         );

@@ -1,5 +1,23 @@
 import { ActiveTrace, Span } from './types';
 
+// ---------------------------------------------------------------------------
+// Static import — guaranteed by the bundler for Node.js environments.
+// tsup/esbuild keeps 'async_hooks' external and emits a top-level require.
+// This runs at module evaluation time, before any SDK code executes.
+//
+// For non-Node runtimes (Cloudflare Workers, etc.), the import will be
+// undefined and we fall through to the dynamic resolution below.
+// ---------------------------------------------------------------------------
+let StaticALS: typeof import('async_hooks').AsyncLocalStorage | null = null;
+try {
+  const mod = require('async_hooks');
+  StaticALS = mod?.AsyncLocalStorage ?? null;
+} catch {}
+
+// ---------------------------------------------------------------------------
+// Storage interface
+// ---------------------------------------------------------------------------
+
 interface IStorage<T> {
   run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R;
   getStore(): T | undefined;
@@ -49,22 +67,22 @@ class NaiveStorage<T> implements IStorage<T> {
 /**
  * Resolve the best available async context storage.
  *
- * Tries multiple resolution strategies to cover CJS, ESM, and edge runtimes.
+ * 1. Use the statically imported AsyncLocalStorage (Node.js — always works)
+ * 2. Check globalThis (Cloudflare Workers nodejs_compat_v2, Bun, Deno)
+ * 3. Fall back to NaiveStorage (Cloudflare Workers without nodejs_compat)
  */
-const tryResolveALS = <T>(): IStorage<T> | null => {
-  // 1. Check globalThis (Cloudflare Workers nodejs_compat_v2, Bun, Deno)
+const resolveStorage = <T>(): IStorage<T> => {
+  // 1. Static import — resolved at module load time (Node.js)
+  if (StaticALS) {
+    return new StaticALS() as unknown as IStorage<T>;
+  }
+
+  // 2. globalThis (Cloudflare Workers nodejs_compat_v2, Bun, Deno)
   if (typeof globalThis !== 'undefined' && (globalThis as any).AsyncLocalStorage) {
     return new (globalThis as any).AsyncLocalStorage();
   }
 
-  // 2. Node.js CJS require
-  try {
-    if (typeof require !== 'undefined') {
-      const mod = require('node:async_hooks');
-      if (mod?.AsyncLocalStorage) return new mod.AsyncLocalStorage();
-    }
-  } catch {}
-
+  // 3. Dynamic require fallback (edge case: bundler didn't resolve static import)
   try {
     if (typeof require !== 'undefined') {
       const mod = require('async_hooks');
@@ -72,49 +90,11 @@ const tryResolveALS = <T>(): IStorage<T> | null => {
     }
   } catch {}
 
-  // 3. ESM fallback: indirect require via Function constructor
-  // In bundled ESM (tsup/esbuild), `require` is shimmed and steps 1-2 work.
-  // This step handles raw ESM where require is truly unavailable.
-  try {
-    if (typeof require === 'undefined' && typeof process !== 'undefined') {
-      const fn = new Function('try { var m = require("module"); return m.createRequire(process.cwd() + "/")("node:async_hooks"); } catch(e) { return null; }');
-      const mod = fn();
-      if (mod?.AsyncLocalStorage) return new mod.AsyncLocalStorage();
-    }
-  } catch {}
-
-  return null;
+  // 4. Last resort — NaiveStorage (Cloudflare Workers without nodejs_compat)
+  return new NaiveStorage<T>();
 };
 
-class LazyStorage<T> implements IStorage<T> {
-  private inner: IStorage<T>;
-  private resolved = false;
-
-  constructor() {
-    this.inner = tryResolveALS<T>() || new NaiveStorage<T>();
-    this.resolved = !(this.inner instanceof NaiveStorage);
-  }
-
-  private ensureResolved() {
-    if (this.resolved) return;
-    const als = tryResolveALS<T>();
-    if (als) {
-      this.inner = als;
-      this.resolved = true;
-    }
-  }
-
-  run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R {
-    this.ensureResolved();
-    return this.inner.run(store, callback, ...args);
-  }
-
-  getStore(): T | undefined {
-    return this.inner.getStore();
-  }
-}
-
-export const storage = new LazyStorage<ActiveTrace>();
+export const storage = resolveStorage<ActiveTrace>();
 
 export const Context = {
   run: <T>(trace: ActiveTrace, fn: () => T): T => {

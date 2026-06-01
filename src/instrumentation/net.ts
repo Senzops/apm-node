@@ -6,8 +6,7 @@ import { runWithCapturedSpan, startCapturedSpan } from './span';
 // Net (TCP) Instrumentation
 //
 // Instruments Node.js core `net` module:
-//   - net.connect() / net.createConnection()  — TCP connection spans
-//   - net.Socket.prototype.connect()          — socket-level connection
+//   - net.Socket.prototype.connect() — socket-level connection spans
 //
 // Captures TCP connection establishment latency and peer information.
 // Follows OTel semantic conventions: net.peer.name, net.peer.port, net.transport
@@ -21,35 +20,60 @@ import { runWithCapturedSpan, startCapturedSpan } from './span';
  * Normalize connection options from the various net.connect() signatures:
  *   - connect(port, host, cb)
  *   - connect({ port, host }, cb)
- *   - connect(path, cb)        — IPC / Unix domain socket
- *   - connect({ path }, cb)    — IPC / Unix domain socket
+ *   - connect(path, cb)              — IPC / Unix domain socket
+ *   - connect({ path }, cb)          — IPC / Unix domain socket
+ *   - connect([options, cb])         — Node.js internal normalized format
+ *   - connect([port, host, cb])      — Node.js internal normalized format
  */
 const normalizeConnectArgs = (
   args: any[]
-): { host: string; port: number | string; isIPC: boolean } => {
-  const first = args[0];
+): { host: string; port: number | string; isIPC: boolean } | null => {
+  try {
+    let first = args[0];
 
-  // Object form: { port, host } or { path }
-  if (typeof first === 'object' && first !== null && !Array.isArray(first)) {
-    if (first.path) {
-      return { host: first.path, port: 'ipc', isIPC: true };
+    // Node.js internally calls socket.connect(normalizedArray) where
+    // normalizedArray is [options, cb]. Unwrap the array.
+    if (Array.isArray(first)) {
+      first = first[0];
+      if (first === undefined || first === null) {
+        return { host: 'localhost', port: 0, isIPC: false };
+      }
     }
-    return {
-      host: first.host || 'localhost',
-      port: first.port || 0,
-      isIPC: false,
-    };
-  }
 
-  // String form: path (IPC)
-  if (typeof first === 'string' && !Number.isFinite(Number(first))) {
-    return { host: first, port: 'ipc', isIPC: true };
-  }
+    // Object form: { port, host } or { path }
+    if (typeof first === 'object' && first !== null) {
+      if (first.path) {
+        return { host: String(first.path), port: 'ipc', isIPC: true };
+      }
+      return {
+        host: String(first.host || 'localhost'),
+        port: typeof first.port === 'number' ? first.port : (parseInt(String(first.port), 10) || 0),
+        isIPC: false,
+      };
+    }
 
-  // Numeric form: port, [host]
-  const port = Number(first) || 0;
-  const host = typeof args[1] === 'string' ? args[1] : 'localhost';
-  return { host, port, isIPC: false };
+    // String form: path (IPC) — non-numeric strings are treated as Unix socket paths
+    if (typeof first === 'string') {
+      const asNum = Number(first);
+      if (!Number.isFinite(asNum)) {
+        return { host: first, port: 'ipc', isIPC: true };
+      }
+      // Numeric string — treat as port
+      const host = typeof args[1] === 'string' ? args[1] : 'localhost';
+      return { host, port: asNum, isIPC: false };
+    }
+
+    // Numeric form: port, [host]
+    if (typeof first === 'number') {
+      const host = typeof args[1] === 'string' ? args[1] : 'localhost';
+      return { host, port: first, isIPC: false };
+    }
+
+    // Unrecognized format — skip instrumentation
+    return null;
+  } catch {
+    return null;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -66,7 +90,12 @@ const patchSocketConnect = (netModule: any, options?: SenzorOptions) => {
     'senzor.net.socket.connect',
     (original) =>
       function patchedSocketConnect(this: any, ...args: any[]) {
-        const { host, port, isIPC } = normalizeConnectArgs(args);
+        const parsed = normalizeConnectArgs(args);
+
+        // If we can't parse the args, pass through to original without instrumentation
+        if (!parsed) return original.apply(this, args);
+
+        const { host, port, isIPC } = parsed;
 
         const spanName = isIPC
           ? `TCP connect ${host}`
@@ -87,69 +116,61 @@ const patchSocketConnect = (netModule: any, options?: SenzorOptions) => {
         if (!span) return original.apply(this, args);
 
         return runWithCapturedSpan(span, () => {
-          const socket = original.apply(this, args);
+          try {
+            const socket = original.apply(this, args);
 
-          let ended = false;
-          const endOnce = (status: number, meta: Record<string, any> = {}) => {
-            if (ended) return;
-            ended = true;
-            span.end(status, meta);
-          };
-
-          // Connection established successfully
-          socket.once('connect', () => {
-            endOnce(0, {
-              'net.peer.address': socket.remoteAddress,
-              'net.peer.port': socket.remotePort,
-              'net.local.address': socket.localAddress,
-              'net.local.port': socket.localPort,
-            });
-          });
-
-          // Connection failed
-          socket.once('error', (err: any) => {
-            endOnce(500, {
-              'error.message': err?.message,
-              'error.type': err?.code || err?.name || 'NetError',
-              'net.error_code': err?.code,
-            });
-          });
-
-          // Connection timed out
-          socket.once('timeout', () => {
-            endOnce(504, {
-              'error.message': 'Connection timed out',
-              'error.type': 'TimeoutError',
-            });
-          });
-
-          // Connection closed before establishing
-          socket.once('close', (hadError: boolean) => {
-            if (hadError) {
-              endOnce(500, {
-                'error.message': 'Connection closed with error',
-              });
-            } else {
-              endOnce(0);
+            if (!socket || typeof socket.once !== 'function') {
+              span.end(0);
+              return socket;
             }
-          });
 
-          return socket;
+            let ended = false;
+            const endOnce = (status: number, meta: Record<string, any> = {}) => {
+              if (ended) return;
+              ended = true;
+              span.end(status, meta);
+            };
+
+            socket.once('connect', () => {
+              endOnce(0, {
+                'net.peer.address': socket.remoteAddress,
+                'net.peer.port': socket.remotePort,
+                'net.local.address': socket.localAddress,
+                'net.local.port': socket.localPort,
+              });
+            });
+
+            socket.once('error', (err: any) => {
+              endOnce(500, {
+                'error.message': err?.message,
+                'error.type': err?.code || err?.name || 'NetError',
+                'net.error_code': err?.code,
+              });
+            });
+
+            socket.once('timeout', () => {
+              endOnce(504, {
+                'error.message': 'Connection timed out',
+                'error.type': 'TimeoutError',
+              });
+            });
+
+            socket.once('close', (hadError: boolean) => {
+              if (hadError) {
+                endOnce(500, { 'error.message': 'Connection closed with error' });
+              } else {
+                endOnce(0);
+              }
+            });
+
+            return socket;
+          } catch (err) {
+            span.end(500, { 'error.message': (err as Error)?.message, 'error.type': (err as Error)?.name });
+            throw err;
+          }
         });
       }
   );
-};
-
-/**
- * Patch net.connect() and net.createConnection() factory functions.
- * These create a new Socket and immediately call socket.connect().
- * Since we patch Socket.prototype.connect, these are automatically covered.
- * However, we add a thin wrapper for consistency in span naming.
- */
-const patchNetFactories = (netModule: any, options?: SenzorOptions) => {
-  // net.connect and net.createConnection are usually the same function
-  // Since we patch Socket.prototype.connect, the factory functions are
-  // automatically instrumented. No additional patching needed.
 };
 
 // ---------------------------------------------------------------------------
@@ -167,5 +188,4 @@ export const instrumentNet = (options?: SenzorOptions) => {
   if (!net) return;
 
   patchSocketConnect(net, options);
-  patchNetFactories(net, options);
 };
