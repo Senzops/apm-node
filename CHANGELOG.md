@@ -1,3 +1,7 @@
+# 1.3.3
+
+fix: regression from v2 to v3
+
 # 1.3.2
 
 fix: package stability issues
