@@ -1,3 +1,9 @@
+# 1.3.4
+
+fix: resolve native Node.js ESM context loss and require-cache patching regressions
+fix: support built-in modules auto-instrumentation (DNS, HTTP, FS, Net, perf_hooks) in ESM Node.js
+feat: optimize Worker bundle payload by redirecting Node-specific packages to stub targets
+
 # 1.3.3
 
 fix: regression from v2 to v3
