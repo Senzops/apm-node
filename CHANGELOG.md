@@ -1,3 +1,7 @@
+# 1.3.5
+
+chore: address performance bugs
+
 # 1.3.4
 
 fix: resolve native Node.js ESM context loss and require-cache patching regressions
