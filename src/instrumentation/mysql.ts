@@ -64,7 +64,7 @@ const patchSqlMethod = (
           try {
             const result = original.apply(this, args);
 
-            if (result && typeof result.then === 'function') {
+            if (result && typeof result.then === 'function' && typeof result.catch === 'function') {
               return result.then(
                 (value: any) => {
                   const rows = Array.isArray(value) ? value[0] : value;
