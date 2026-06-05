@@ -1,4 +1,9 @@
+# 1.3.7
+
+fix: redis instrumentation
+
 # 1.3.6
+
 fix(mysql): resolve dummy thenable exception for callback-based queries
 
 # 1.3.5
