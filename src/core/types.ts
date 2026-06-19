@@ -5,6 +5,14 @@ export interface SenzorOptions {
   flushInterval?: number;
   flushTimeoutMs?: number;
   maxQueueSize?: number;
+  /**
+   * Maximum serialized byte size of a single ingest request body. Flushes are
+   * split into multiple requests so none exceeds this size, keeping payloads
+   * safely under the ingest endpoint's body-size limit. Defaults to 900_000
+   * (~0.9 MB) to stay under common 1 MB limits; raise it if your endpoint
+   * allows larger bodies to reduce request count.
+   */
+  maxBatchBytes?: number;
   maxSpansPerTrace?: number;
   maxAttributeLength?: number;
   maxAttributes?: number;

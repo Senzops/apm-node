@@ -1,3 +1,7 @@
+# 1.3.9
+
+fix(transport): split each flush into size-bounded requests (new `maxBatchBytes` option, default ~0.9MB) so a single POST can never exceed the ingest body limit; classify failures (retryable network/5xx/429 vs non-retryable 4xx) and drop+count non-retryable or oversized-single-item payloads instead of restoring them — fixes the death spiral where large instrumented payloads (413) silently halted telemetry until restart
+
 # 1.3.8
 
 fix(bullmq): forward all processJob arguments (token, fetchNextCallback) so lock tokens match — resolves "Lock mismatch ... moveToFinished from active" (code -6) and restores worker concurrency backpressure

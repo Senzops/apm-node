@@ -18,6 +18,44 @@ interface TaskPayload {
 const MAX_BACKOFF_MS = 60_000;
 const BASE_BACKOFF_MS = 1_000;
 
+// Default ceiling for a single ingest request body. Kept under common 1 MB
+// server body limits so a flush never produces an unsendable, oversized POST.
+const DEFAULT_MAX_BATCH_BYTES = 900_000;
+
+// Headroom reserved for the JSON envelope (object braces, array keys) and
+// request headers on top of the packed array items.
+const WRAPPER_OVERHEAD_BYTES = 2_048;
+
+/**
+ * HTTP-level ingest failure carrying the response status, so the transport can
+ * distinguish retryable (network / 5xx / 429) from non-retryable (4xx) errors.
+ */
+class IngestHttpError extends Error {
+  constructor(public readonly status: number) {
+    super(`Senzor ingest failed with status ${status}`);
+    this.name = 'IngestHttpError';
+  }
+}
+
+/** Universal UTF-8 byte length (Node Buffer, then TextEncoder, then length). */
+const byteLength = (str: string): number => {
+  if (typeof Buffer !== 'undefined' && typeof Buffer.byteLength === 'function') {
+    return Buffer.byteLength(str);
+  }
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(str).length;
+  }
+  return str.length;
+};
+
+/** A single bounded ingest request plus the means to restore its items on a retryable failure. */
+interface FlushRequest {
+  endpoint: string;
+  body: Record<string, unknown>;
+  count: number;
+  restore: () => void;
+}
+
 export class Transport {
   private traceQueue: Trace[] = [];
   private apmErrorQueue: SenzorError[] = [];
@@ -39,7 +77,14 @@ export class Transport {
   private consecutiveFailures = 0;
   private backoffUntil = 0;
 
+  private readonly maxBatchBytes: number;
+
   constructor(private config: SenzorOptions) {
+    this.maxBatchBytes = Math.max(
+      WRAPPER_OVERHEAD_BYTES * 2,
+      config.maxBatchBytes ?? DEFAULT_MAX_BATCH_BYTES
+    );
+
     const baseEndpoint = config.endpoint || 'https://api.senzor.dev';
     this.apmEndpoint = baseEndpoint.includes('/api/ingest')
       ? baseEndpoint
@@ -169,36 +214,113 @@ export class Transport {
     return payload;
   }
 
-  private restoreApmPayload(payload: ApmPayload) {
-    this.prependWithLimit(this.apmLogQueue, payload.logs);
-    this.prependWithLimit(this.apmErrorQueue, payload.errors);
-    this.prependWithLimit(this.traceQueue, payload.traces);
-    if (payload.runtimeMetrics) {
-      this.prependWithLimit(this.runtimeMetricsQueue, payload.runtimeMetrics);
+  /**
+   * Greedily packs `items` into chunks whose serialized size stays under the
+   * per-request budget. A single item larger than the budget can never be sent
+   * (it would always be rejected for size) and is dropped + counted rather than
+   * left to block the queue forever (poison-message guard).
+   */
+  private chunkBySize<T>(items: T[], targetBytes: number): T[][] {
+    if (!items.length) return [];
+
+    const budget = Math.max(1, targetBytes - WRAPPER_OVERHEAD_BYTES);
+    const chunks: T[][] = [];
+    let current: T[] = [];
+    let currentBytes = 0;
+
+    for (const item of items) {
+      let itemBytes: number;
+      try {
+        // +1 accounts for the comma separator between array elements.
+        itemBytes = byteLength(JSON.stringify(item)) + 1;
+      } catch {
+        // Unserializable (e.g. circular) — it can never be sent. Drop it.
+        this.droppedItems++;
+        continue;
+      }
+
+      if (itemBytes > budget) {
+        this.droppedItems++;
+        if (this.config.debug) {
+          console.warn(
+            `[Senzor] Dropped oversized item (${itemBytes}B > ${budget}B budget); cannot fit a single request`
+          );
+        }
+        continue;
+      }
+
+      if (current.length && currentBytes + itemBytes > budget) {
+        chunks.push(current);
+        current = [];
+        currentBytes = 0;
+      }
+
+      current.push(item);
+      currentBytes += itemBytes;
     }
+
+    if (current.length) chunks.push(current);
+    return chunks;
   }
 
-  private restoreTaskPayload(payload: TaskPayload) {
-    this.prependWithLimit(this.taskLogQueue, payload.logs);
-    this.prependWithLimit(this.taskErrorQueue, payload.errors);
-    this.prependWithLimit(this.taskQueue, payload.runs);
+  private buildApmRequests(payload: ApmPayload): FlushRequest[] {
+    const requests: FlushRequest[] = [];
+    const max = this.maxBatchBytes;
+
+    const push = (items: any[], key: string, queue: any[]) => {
+      for (const chunk of this.chunkBySize(items, max)) {
+        requests.push({
+          endpoint: this.apmEndpoint,
+          body: { traces: [], errors: [], logs: [], runtimeMetrics: [], [key]: chunk },
+          count: chunk.length,
+          restore: () => this.prependWithLimit(queue, chunk)
+        });
+      }
+    };
+
+    push(payload.traces, 'traces', this.traceQueue);
+    push(payload.errors, 'errors', this.apmErrorQueue);
+    push(payload.logs, 'logs', this.apmLogQueue);
+    if (payload.runtimeMetrics?.length) {
+      push(payload.runtimeMetrics, 'runtimeMetrics', this.runtimeMetricsQueue);
+    }
+
+    return requests;
   }
 
-  private hasApmPayload(payload: ApmPayload): boolean {
-    return (
-      payload.traces.length > 0 ||
-      payload.errors.length > 0 ||
-      payload.logs.length > 0 ||
-      (payload.runtimeMetrics?.length ?? 0) > 0
-    );
+  private buildTaskRequests(payload: TaskPayload): FlushRequest[] {
+    const requests: FlushRequest[] = [];
+    const max = this.maxBatchBytes;
+
+    const push = (items: any[], key: string, queue: any[]) => {
+      for (const chunk of this.chunkBySize(items, max)) {
+        requests.push({
+          endpoint: this.taskEndpoint,
+          body: { runs: [], errors: [], logs: [], [key]: chunk },
+          count: chunk.length,
+          restore: () => this.prependWithLimit(queue, chunk)
+        });
+      }
+    };
+
+    push(payload.runs, 'runs', this.taskQueue);
+    push(payload.errors, 'errors', this.taskErrorQueue);
+    push(payload.logs, 'logs', this.taskLogQueue);
+
+    return requests;
   }
 
-  private hasTaskPayload(payload: TaskPayload): boolean {
-    return (
-      payload.runs.length > 0 ||
-      payload.errors.length > 0 ||
-      payload.logs.length > 0
-    );
+  /**
+   * Network errors, timeouts and aborts are transient and safe to retry. A 4xx
+   * (except 408/425/429) is a permanent rejection — retrying the same payload
+   * is futile and would lock the queue, so it is treated as non-retryable.
+   */
+  private isRetryableError(error: unknown): boolean {
+    if (error instanceof IngestHttpError) {
+      const s = error.status;
+      return s === 408 || s === 425 || s === 429 || s >= 500;
+    }
+    return true;
   }
 
   private async postJson(endpoint: string, payload: unknown) {
@@ -224,7 +346,7 @@ export class Transport {
       });
 
       if (!response.ok) {
-        throw new Error(`Senzor ingest failed with status ${response.status}`);
+        throw new IngestHttpError(response.status);
       }
     } finally {
       clearTimeout(timeout);
@@ -247,42 +369,61 @@ export class Transport {
 
         const apmPayload = this.takeApmPayload();
         const taskPayload = this.takeTaskPayload();
-        const sends: Promise<void>[] = [];
 
-        if (this.hasApmPayload(apmPayload)) {
-          sends.push(
-            this.postJson(this.apmEndpoint, apmPayload).catch((error) => {
-              this.restoreApmPayload(apmPayload);
-              throw error;
-            })
-          );
+        // Split the drained queues into size-bounded requests so no single
+        // POST can exceed the ingest endpoint's body limit.
+        const requests = [
+          ...this.buildApmRequests(apmPayload),
+          ...this.buildTaskRequests(taskPayload)
+        ];
+
+        if (!requests.length) continue;
+
+        let backedOff = false;
+        let sent = 0;
+
+        for (let i = 0; i < requests.length; i++) {
+          const request = requests[i];
+
+          // Once a retryable failure occurs this cycle, stop hitting the
+          // endpoint and return the remaining requests to their queues so the
+          // backoff window is respected.
+          if (backedOff) {
+            request.restore();
+            continue;
+          }
+
+          try {
+            await this.postJson(request.endpoint, request.body);
+            sent++;
+          } catch (error) {
+            if (this.isRetryableError(error)) {
+              request.restore();
+              backedOff = true;
+            } else {
+              // Permanent rejection (4xx) — retrying is futile and would lock
+              // the queue. Drop the items so the pipeline keeps flowing.
+              this.droppedItems += request.count;
+              if (this.config.debug) {
+                console.warn(
+                  `[Senzor] Dropped ${request.count} item(s) — non-retryable ingest error:`,
+                  (error as Error)?.message
+                );
+              }
+            }
+          }
         }
 
-        if (this.hasTaskPayload(taskPayload)) {
-          sends.push(
-            this.postJson(this.taskEndpoint, taskPayload).catch((error) => {
-              this.restoreTaskPayload(taskPayload);
-              throw error;
-            })
-          );
-        }
-
-        if (!sends.length) continue;
-
-        const results = await Promise.allSettled(sends);
-        const failures = results.filter(
-          (result) => result.status === 'rejected'
-        );
-
-        if (failures.length > 0) {
+        if (backedOff) {
           this.consecutiveFailures++;
           const delay = Math.min(
             BASE_BACKOFF_MS * Math.pow(2, this.consecutiveFailures - 1),
             MAX_BACKOFF_MS
           );
           this.backoffUntil = Date.now() + delay;
+          this.flushAgain = false; // honor backoff — don't loop again now
           if (this.config.debug) {
-            console.warn(`[Senzor] Flush failed (attempt ${this.consecutiveFailures}), backing off ${delay}ms`);
+            console.warn(`[Senzor] Flush backing off ${delay}ms (attempt ${this.consecutiveFailures})`);
           }
         } else {
           this.consecutiveFailures = 0;
@@ -291,9 +432,11 @@ export class Transport {
 
         if (this.config.debug) {
           console.log(
-            `[Senzor] Flushed: APM(${apmPayload.traces.length} traces, ${apmPayload.logs.length} logs), Task(${taskPayload.runs.length} runs, ${taskPayload.logs.length} logs), failures=${failures.length}, dropped=${this.droppedItems}`
+            `[Senzor] Flushed ${sent}/${requests.length} request(s), backoff=${backedOff}, dropped=${this.droppedItems}`
           );
         }
+
+        if (backedOff) break;
       } while (this.flushAgain);
     } catch (err) {
       if (this.config.debug) console.error('[Senzor] Transport Flush Error:', err);
