@@ -35,8 +35,17 @@ function patchWorker(
 
   proto.processJob =
     async function (
-      job: any
+      this: any,
+      ...args: any[]
     ) {
+
+      const job = args[0];
+
+      // Forward straight through if this isn't a recognizable job. The wrapper
+      // must never alter BullMQ's control flow for unexpected inputs.
+      if (!job || typeof job !== 'object') {
+        return original.apply(this, args);
+      }
 
       const queueDelay =
         job.timestamp
@@ -85,10 +94,16 @@ function patchWorker(
 
           try {
 
+            // Forward EVERY argument BullMQ passed (job, token,
+            // fetchNextCallback, ...). The `token` is the per-job lock token —
+            // dropping it makes lock renewal and moveToFinished use an empty
+            // token, producing "Lock mismatch" (code -6) errors. Forwarding all
+            // args also preserves concurrency backpressure (fetchNextCallback)
+            // and any future BullMQ signature additions.
             const result =
-              await original.call(
+              await original.apply(
                 this,
-                job
+                args
               );
 
             client.endTask(

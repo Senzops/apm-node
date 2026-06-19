@@ -1,3 +1,7 @@
+# 1.3.8
+
+fix(bullmq): forward all processJob arguments (token, fetchNextCallback) so lock tokens match — resolves "Lock mismatch ... moveToFinished from active" (code -6) and restores worker concurrency backpressure
+
 # 1.3.7
 
 fix: redis instrumentation
