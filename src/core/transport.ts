@@ -1,5 +1,5 @@
 import { SENZOR_INTERNAL_HEADER } from '../utils/internal';
-import { SenzorOptions, Trace, TaskRun, SenzorError, SenzorLog } from './types';
+import { SenzorOptions, Trace, TaskRun, SenzorError, SenzorLog, AiTracePayload, AiGenerationPayload, AiScorePayload } from './types';
 import type { RuntimeMetricsPayload } from '../instrumentation/runtime';
 
 interface ApmPayload {
@@ -11,6 +11,14 @@ interface ApmPayload {
 
 interface TaskPayload {
   runs: TaskRun[];
+  errors: SenzorError[];
+  logs: SenzorLog[];
+}
+
+interface AiPayload {
+  aiTraces: AiTracePayload[];
+  aiGenerations: AiGenerationPayload[];
+  aiScores: AiScorePayload[];
   errors: SenzorError[];
   logs: SenzorLog[];
 }
@@ -66,10 +74,17 @@ export class Transport {
   private taskErrorQueue: SenzorError[] = [];
   private taskLogQueue: SenzorLog[] = [];
 
+  private aiTraceQueue: AiTracePayload[] = [];
+  private aiGenerationQueue: AiGenerationPayload[] = [];
+  private aiScoreQueue: AiScorePayload[] = [];
+  private aiErrorQueue: SenzorError[] = [];
+  private aiLogQueue: SenzorLog[] = [];
+
   private timer: ReturnType<typeof setInterval> | null = null;
   private timerStarted = false;
   private apmEndpoint: string;
   private taskEndpoint: string;
+  private aiEndpoint: string;
   private isFlushing = false;
   private flushAgain = false;
   private droppedItems = 0;
@@ -92,6 +107,9 @@ export class Transport {
     this.taskEndpoint = baseEndpoint.includes('/api/ingest')
       ? baseEndpoint.replace('/apm', '/task')
       : `${baseEndpoint}/api/ingest/task`;
+    this.aiEndpoint = baseEndpoint.includes('/api/ingest')
+      ? baseEndpoint.replace('/apm', '/ai')
+      : `${baseEndpoint}/api/ingest/ai`;
   }
 
   private ensureTimer() {
@@ -143,6 +161,31 @@ export class Transport {
     this.enqueue(this.runtimeMetricsQueue, payload);
   }
 
+  public addAiTrace(trace: AiTracePayload) {
+    this.enqueue(this.aiTraceQueue, trace);
+    this.checkFlush();
+  }
+
+  public addAiGeneration(generation: AiGenerationPayload) {
+    this.enqueue(this.aiGenerationQueue, generation);
+    this.checkFlush();
+  }
+
+  public addAiScore(score: AiScorePayload) {
+    this.enqueue(this.aiScoreQueue, score);
+    this.checkFlush();
+  }
+
+  public addAiError(error: SenzorError) {
+    this.enqueue(this.aiErrorQueue, error);
+    this.checkFlush();
+  }
+
+  public addAiLog(log: SenzorLog) {
+    this.enqueue(this.aiLogQueue, log);
+    this.checkFlush();
+  }
+
   private enqueue<T>(queue: T[], item: T) {
     this.ensureTimer();
     queue.push(item);
@@ -174,10 +217,17 @@ export class Transport {
       this.taskQueue.length +
       this.taskErrorQueue.length +
       this.taskLogQueue.length;
+    const totalAi =
+      this.aiTraceQueue.length +
+      this.aiGenerationQueue.length +
+      this.aiScoreQueue.length +
+      this.aiErrorQueue.length +
+      this.aiLogQueue.length;
 
     if (
       totalApm >= (this.config.batchSize || 100) ||
-      totalTask >= (this.config.batchSize || 100)
+      totalTask >= (this.config.batchSize || 100) ||
+      totalAi >= (this.config.batchSize || 100)
     ) {
       void this.flush();
     }
@@ -211,6 +261,23 @@ export class Transport {
     this.taskQueue = [];
     this.taskErrorQueue = [];
     this.taskLogQueue = [];
+    return payload;
+  }
+
+  private takeAiPayload(): AiPayload {
+    const payload: AiPayload = {
+      aiTraces: this.aiTraceQueue,
+      aiGenerations: this.aiGenerationQueue,
+      aiScores: this.aiScoreQueue,
+      errors: this.aiErrorQueue,
+      logs: this.aiLogQueue,
+    };
+
+    this.aiTraceQueue = [];
+    this.aiGenerationQueue = [];
+    this.aiScoreQueue = [];
+    this.aiErrorQueue = [];
+    this.aiLogQueue = [];
     return payload;
   }
 
@@ -310,6 +377,30 @@ export class Transport {
     return requests;
   }
 
+  private buildAiRequests(payload: AiPayload): FlushRequest[] {
+    const requests: FlushRequest[] = [];
+    const max = this.maxBatchBytes;
+
+    const push = (items: any[], key: string, queue: any[]) => {
+      for (const chunk of this.chunkBySize(items, max)) {
+        requests.push({
+          endpoint: this.aiEndpoint,
+          body: { aiTraces: [], aiGenerations: [], aiScores: [], errors: [], logs: [], [key]: chunk },
+          count: chunk.length,
+          restore: () => this.prependWithLimit(queue, chunk)
+        });
+      }
+    };
+
+    push(payload.aiTraces, 'aiTraces', this.aiTraceQueue);
+    push(payload.aiGenerations, 'aiGenerations', this.aiGenerationQueue);
+    push(payload.aiScores, 'aiScores', this.aiScoreQueue);
+    push(payload.errors, 'errors', this.aiErrorQueue);
+    push(payload.logs, 'logs', this.aiLogQueue);
+
+    return requests;
+  }
+
   /**
    * Network errors, timeouts and aborts are transient and safe to retry. A 4xx
    * (except 408/425/429) is a permanent rejection — retrying the same payload
@@ -369,12 +460,14 @@ export class Transport {
 
         const apmPayload = this.takeApmPayload();
         const taskPayload = this.takeTaskPayload();
+        const aiPayload = this.takeAiPayload();
 
         // Split the drained queues into size-bounded requests so no single
         // POST can exceed the ingest endpoint's body limit.
         const requests = [
           ...this.buildApmRequests(apmPayload),
-          ...this.buildTaskRequests(taskPayload)
+          ...this.buildTaskRequests(taskPayload),
+          ...this.buildAiRequests(aiPayload)
         ];
 
         if (!requests.length) continue;

@@ -1,4 +1,4 @@
-import { ActiveTrace, Span } from './types';
+import { ActiveTrace, AiTraceContext, Span } from './types';
 
 interface IStorage<T> {
   run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R;
@@ -44,6 +44,9 @@ const resolveStorage = <T>(): IStorage<T> => {
 };
 
 export const storage = resolveStorage<ActiveTrace>();
+
+// Dedicated storage for AI-trace contexts (universal-runtime variant).
+export const aiStorage = resolveStorage<AiTraceContext>();
 
 export const Context = {
   run: <T>(trace: ActiveTrace, fn: () => T): T => {

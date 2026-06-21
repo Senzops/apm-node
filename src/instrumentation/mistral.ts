@@ -2,6 +2,8 @@ import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
 import { runWithCapturedSpan, startCapturedSpan } from './span';
+import { recordProviderGeneration } from './ai/emit';
+import { isAsyncIterable, wrapAiStream } from './ai/stream';
 
 // ---------------------------------------------------------------------------
 // Mistral AI SDK Instrumentation
@@ -97,6 +99,9 @@ const patchResourceMethod = (
 
         if (!span) return original.apply(this, args);
 
+        const startedAt = Date.now();
+        const emitType = operation.startsWith('embed') ? 'embedding' : 'generation';
+
         return runWithCapturedSpan(span, () => {
           try {
             const result = original.apply(this, args);
@@ -105,6 +110,19 @@ const patchResourceMethod = (
               return result.then(
                 (value: any) => {
                   span.end(0, extractUsage(value));
+                  recordProviderGeneration({
+                    provider: 'mistral',
+                    operation,
+                    type: emitType,
+                    requestModel: model,
+                    responseModel: value?.model,
+                    tokensIn: value?.usage?.promptTokens ?? value?.usage?.prompt_tokens,
+                    tokensOut: value?.usage?.completionTokens ?? value?.usage?.completion_tokens,
+                    latencyMs: Date.now() - startedAt,
+                    finishReason:
+                      value?.choices?.[0]?.finishReason ?? value?.choices?.[0]?.finish_reason,
+                    status: 'ok',
+                  });
                   return value;
                 },
                 (error: any) => {
@@ -112,9 +130,66 @@ const patchResourceMethod = (
                     'error.message': error?.message,
                     'error.type': error?.name || 'MistralError',
                   });
+                  recordProviderGeneration({
+                    provider: 'mistral',
+                    operation,
+                    type: emitType,
+                    requestModel: model,
+                    latencyMs: Date.now() - startedAt,
+                    status: 'error',
+                    statusCode: error?.statusCode || error?.status || 500,
+                    errorType: error?.name || 'MistralError',
+                    errorMessage: error?.message,
+                  });
                   throw error;
                 }
               );
+            }
+
+            // Streaming (chat.stream / fim.stream): each event is a
+            // CompletionEvent whose `.data` carries the delta and (on the final
+            // event) usage. Observed without consuming the caller's stream.
+            if (model && isAsyncIterable(result)) {
+              span.end(0);
+              let ttft: number | undefined;
+              let tokensIn: number | undefined;
+              let tokensOut: number | undefined;
+              let respModel: string | undefined;
+              let finishReason: string | undefined;
+              const aggregated: string[] = [];
+
+              return wrapAiStream(result, {
+                onChunk: (ev: any) => {
+                  if (ttft === undefined) ttft = Date.now() - startedAt;
+                  const data = ev?.data ?? ev;
+                  const text = data?.choices?.[0]?.delta?.content;
+                  if (typeof text === 'string') aggregated.push(text);
+                  if (data?.model) respModel = data.model;
+                  if (data?.usage) {
+                    tokensIn = data.usage.promptTokens ?? data.usage.prompt_tokens ?? tokensIn;
+                    tokensOut = data.usage.completionTokens ?? data.usage.completion_tokens ?? tokensOut;
+                  }
+                  const fr = data?.choices?.[0]?.finishReason ?? data?.choices?.[0]?.finish_reason;
+                  if (fr) finishReason = fr;
+                },
+                onDone: () => {
+                  recordProviderGeneration({
+                    provider: 'mistral',
+                    operation,
+                    type: emitType,
+                    requestModel: model,
+                    responseModel: respModel,
+                    tokensIn,
+                    tokensOut,
+                    latencyMs: Date.now() - startedAt,
+                    timeToFirstTokenMs: ttft,
+                    finishReason,
+                    streaming: true,
+                    output: aggregated.length ? aggregated.join('') : undefined,
+                    status: 'ok',
+                  });
+                },
+              });
             }
 
             span.end(0);

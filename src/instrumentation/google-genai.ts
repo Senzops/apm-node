@@ -2,6 +2,32 @@ import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
 import { runWithCapturedSpan, startCapturedSpan } from './span';
+import { recordProviderGeneration } from './ai/emit';
+
+/** Emit a first-class AI generation for a Gemini call. */
+const emitGemini = (
+  system: 'google_ai' | 'vertex_ai',
+  operation: string,
+  model: string,
+  startedAt: number,
+  value: any,
+  error: any
+) => {
+  const response = value?.response || value;
+  const usage = response?.usageMetadata;
+  recordProviderGeneration({
+    provider: system === 'vertex_ai' ? 'google-vertex' : 'google-genai',
+    operation,
+    requestModel: model,
+    tokensIn: usage?.promptTokenCount,
+    tokensOut: usage?.candidatesTokenCount,
+    latencyMs: Date.now() - startedAt,
+    finishReason: response?.candidates?.[0]?.finishReason,
+    status: error ? 'error' : 'ok',
+    errorType: error ? (error.name || 'GoogleGenAIError') : undefined,
+    errorMessage: error ? error.message : undefined,
+  });
+};
 
 // ---------------------------------------------------------------------------
 // Google Generative AI (Gemini) Instrumentation
@@ -100,6 +126,8 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
 
           if (!span) return original.call(this, request);
 
+          const startedAt = Date.now();
+
           return runWithCapturedSpan(span, () => {
             try {
               const result = original.call(this, request);
@@ -108,6 +136,7 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
                 return result.then(
                   (value: any) => {
                     span.end(0, extractResponseUsage(value));
+                    emitGemini('google_ai', 'generateContent', modelName, startedAt, value, null);
                     return value;
                   },
                   (error: any) => {
@@ -115,6 +144,7 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
                       'error.message': error?.message,
                       'error.type': error?.name || 'GoogleGenAIError',
                     });
+                    emitGemini('google_ai', 'generateContent', modelName, startedAt, null, error);
                     throw error;
                   }
                 );
@@ -154,6 +184,8 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
 
             if (!span) return original.call(this, request);
 
+            const startedAt = Date.now();
+
             return runWithCapturedSpan(span, () => {
               try {
                 const result = original.call(this, request);
@@ -164,8 +196,14 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
                       // Stream result has a .response promise for final aggregated response
                       if (streamResult?.response && typeof streamResult.response.then === 'function') {
                         streamResult.response.then(
-                          (resp: any) => span.end(0, extractUsage(resp)),
-                          () => span.end(0)
+                          (resp: any) => {
+                            span.end(0, extractUsage(resp));
+                            emitGemini('google_ai', 'generateContentStream', modelName, startedAt, resp, null);
+                          },
+                          (err: any) => {
+                            span.end(0);
+                            emitGemini('google_ai', 'generateContentStream', modelName, startedAt, null, err);
+                          }
                         );
                       } else {
                         span.end(0);
@@ -321,6 +359,9 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
 
             if (!span) return original.apply(this, args);
 
+            const startedAt = Date.now();
+            const chatOp = isStream ? 'chat.stream' : 'chat';
+
             return runWithCapturedSpan(span, () => {
               try {
                 const result = original.apply(this, args);
@@ -328,10 +369,12 @@ const patchGoogleGenAI = (genaiModule: any, options?: SenzorOptions) => {
                   return result.then(
                     (value: any) => {
                       span.end(0, extractResponseUsage(value));
+                      emitGemini('google_ai', chatOp, modelName, startedAt, value, null);
                       return value;
                     },
                     (error: any) => {
                       span.end(500, { 'error.message': error?.message });
+                      emitGemini('google_ai', chatOp, modelName, startedAt, null, error);
                       throw error;
                     }
                   );
@@ -384,6 +427,8 @@ const patchVertexAI = (vertexModule: any, options?: SenzorOptions) => {
 
           if (!span) return original.call(this, request);
 
+          const startedAt = Date.now();
+
           return runWithCapturedSpan(span, () => {
             try {
               const result = original.call(this, request);
@@ -391,10 +436,12 @@ const patchVertexAI = (vertexModule: any, options?: SenzorOptions) => {
                 return result.then(
                   (value: any) => {
                     span.end(0, extractResponseUsage(value));
+                    emitGemini('vertex_ai', method, modelName, startedAt, value, null);
                     return value;
                   },
                   (error: any) => {
                     span.end(500, { 'error.message': error?.message });
+                    emitGemini('vertex_ai', method, modelName, startedAt, null, error);
                     throw error;
                   }
                 );

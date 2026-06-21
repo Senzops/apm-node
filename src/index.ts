@@ -20,6 +20,14 @@ const Senzor = {
   wrapTask: client.wrapTask.bind(client),
   startTask: client.startTask.bind(client),
 
+  // AI Monitoring (LLM observability)
+  ai: {
+    trace: client.ai.trace.bind(client.ai),
+    generation: client.ai.generation.bind(client.ai),
+    wrapGeneration: client.ai.wrapGeneration.bind(client.ai),
+    score: client.ai.score.bind(client.ai),
+  },
+
   // Express
   requestHandler: expressMiddleware,
   errorHandler: expressErrorHandler,

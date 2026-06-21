@@ -2,6 +2,7 @@ import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
 import { runWithCapturedSpan, startCapturedSpan } from './span';
+import { recordProviderGeneration } from './ai/emit';
 
 // ---------------------------------------------------------------------------
 // Azure OpenAI Instrumentation
@@ -134,6 +135,8 @@ const patchAzureOpenAIClient = (azureModule: any, options?: SenzorOptions) => {
 
           if (!span) return original.call(this, deploymentName, ...args);
 
+          const startedAt = Date.now();
+
           return runWithCapturedSpan(span, () => {
             try {
               const result = original.call(this, deploymentName, ...args);
@@ -142,12 +145,33 @@ const patchAzureOpenAIClient = (azureModule: any, options?: SenzorOptions) => {
                 return result.then(
                   (value: any) => {
                     span.end(0, methodConfig.extractUsage(value));
+                    recordProviderGeneration({
+                      provider: 'azure-openai',
+                      operation: methodConfig.operation,
+                      requestModel: deploymentName,
+                      responseModel: value?.model,
+                      tokensIn: value?.usage?.promptTokens,
+                      tokensOut: value?.usage?.completionTokens,
+                      latencyMs: Date.now() - startedAt,
+                      finishReason: value?.choices?.[0]?.finishReason,
+                      status: 'ok',
+                    });
                     return value;
                   },
                   (error: any) => {
                     span.end(error?.status || 500, {
                       'error.message': error?.message,
                       'error.type': error?.name || 'AzureOpenAIError',
+                    });
+                    recordProviderGeneration({
+                      provider: 'azure-openai',
+                      operation: methodConfig.operation,
+                      requestModel: deploymentName,
+                      latencyMs: Date.now() - startedAt,
+                      status: 'error',
+                      statusCode: error?.status || 500,
+                      errorType: error?.name || 'AzureOpenAIError',
+                      errorMessage: error?.message,
                     });
                     throw error;
                   }

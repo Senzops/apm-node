@@ -2,6 +2,8 @@ import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
 import { runWithCapturedSpan, startCapturedSpan } from './span';
+import { recordProviderGeneration } from './ai/emit';
+import { isAsyncIterable, wrapAiStream } from './ai/stream';
 
 // ---------------------------------------------------------------------------
 // Anthropic SDK Instrumentation
@@ -111,6 +113,8 @@ const patchAnthropicClient = (anthropicModule: any, options?: SenzorOptions) => 
 
           if (!span) return original.call(this, path, opts);
 
+          const startedAt = Date.now();
+
           return runWithCapturedSpan(span, () => {
             try {
               const result = original.call(this, path, opts);
@@ -133,6 +137,80 @@ const patchAnthropicClient = (anthropicModule: any, options?: SenzorOptions) => 
                     }
 
                     span.end(0, endMeta);
+
+                    // First-class AI generation. Emitted once here (not in the
+                    // _request fallback) and only for model-bearing calls.
+                    if (model) {
+                      const params = {
+                        temperature: opts?.body?.temperature,
+                        max_tokens: opts?.body?.max_tokens,
+                        top_p: opts?.body?.top_p,
+                      };
+                      const input = opts?.body?.messages ?? opts?.body?.prompt;
+
+                      // Streaming: Anthropic emits usage natively via SSE events
+                      // (message_start → input_tokens, message_delta → output_tokens).
+                      if (opts?.body?.stream && isAsyncIterable(response)) {
+                        let ttft: number | undefined;
+                        let inputTokens: number | undefined;
+                        let outputTokens: number | undefined;
+                        let respModel: string | undefined;
+                        let stopReason: string | undefined;
+                        const aggregated: string[] = [];
+
+                        return wrapAiStream(response, {
+                          onChunk: (event: any) => {
+                            if (ttft === undefined) ttft = Date.now() - startedAt;
+                            if (event?.type === 'message_start') {
+                              inputTokens = event.message?.usage?.input_tokens ?? inputTokens;
+                              outputTokens = event.message?.usage?.output_tokens ?? outputTokens;
+                              respModel = event.message?.model ?? respModel;
+                            } else if (event?.type === 'message_delta') {
+                              if (event.usage?.output_tokens != null) outputTokens = event.usage.output_tokens;
+                              if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
+                            } else if (event?.type === 'content_block_delta') {
+                              const text = event.delta?.text;
+                              if (typeof text === 'string') aggregated.push(text);
+                            }
+                          },
+                          onDone: () => {
+                            recordProviderGeneration({
+                              provider: 'anthropic',
+                              operation: operationName,
+                              requestModel: model,
+                              responseModel: respModel,
+                              tokensIn: inputTokens,
+                              tokensOut: outputTokens,
+                              latencyMs: Date.now() - startedAt,
+                              timeToFirstTokenMs: ttft,
+                              finishReason: stopReason,
+                              streaming: true,
+                              params,
+                              input,
+                              output: aggregated.length ? aggregated.join('') : undefined,
+                              status: 'ok',
+                            });
+                          },
+                        });
+                      }
+
+                      recordProviderGeneration({
+                        provider: 'anthropic',
+                        operation: operationName,
+                        requestModel: model,
+                        responseModel: response?.model,
+                        tokensIn: response?.usage?.input_tokens,
+                        tokensOut: response?.usage?.output_tokens,
+                        latencyMs: Date.now() - startedAt,
+                        finishReason: response?.stop_reason,
+                        streaming: false,
+                        params,
+                        input,
+                        output: response?.content,
+                        status: 'ok',
+                      });
+                    }
+
                     return response;
                   },
                   (error: any) => {
@@ -143,6 +221,21 @@ const patchAnthropicClient = (anthropicModule: any, options?: SenzorOptions) => 
                       'http.response.status_code': statusCode,
                       'gen_ai.error.code': error?.error?.type,
                     });
+
+                    if (model) {
+                      recordProviderGeneration({
+                        provider: 'anthropic',
+                        operation: operationName,
+                        requestModel: model,
+                        latencyMs: Date.now() - startedAt,
+                        streaming: !!opts?.body?.stream,
+                        status: 'error',
+                        statusCode,
+                        errorType: error?.name || error?.type || 'AnthropicError',
+                        errorMessage: error?.message,
+                      });
+                    }
+
                     throw error;
                   }
                 );

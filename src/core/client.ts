@@ -8,6 +8,7 @@ import { generateSpanId, generateTraceId } from '../utils/ids';
 import { sanitizeAttributes } from './sanitizer';
 import { startCapturedSpan } from '../instrumentation/span';
 import { RuntimeMetricsCollector } from '../instrumentation/runtime';
+import { AiManager, registerAiManager } from './ai';
 
 // Static imports of all instrumentations for reliable Node.js bundling
 import { instrumentHttp, instrumentFetch } from '../instrumentation/http';
@@ -51,6 +52,10 @@ import { instrumentGoogleGenAI } from '../instrumentation/google-genai';
 import { instrumentAzureOpenAI } from '../instrumentation/azure-openai';
 import { instrumentCohere } from '../instrumentation/cohere';
 import { instrumentMistral } from '../instrumentation/mistral';
+import { instrumentVercelAi } from '../instrumentation/vercel-ai';
+import { instrumentLangchain } from '../instrumentation/langchain';
+import { instrumentGroq } from '../instrumentation/groq';
+import { instrumentOllama } from '../instrumentation/ollama';
 import { instrumentFirebase } from '../instrumentation/firebase';
 
 const MAX_STRINGIFY_LENGTH = 8192;
@@ -77,6 +82,12 @@ export class SenzorClient {
   private options: SenzorOptions | null = null;
   private isInstrumented = false;
   private runtimeMetricsCollector: RuntimeMetricsCollector | null = null;
+
+  /** AI monitoring (LLM observability) manual API + internal emit path. */
+  public readonly ai = new AiManager(
+    () => this.transport,
+    () => this.options
+  );
 
   public preload(options: Partial<SenzorOptions> = {}) {
     const endpoint = options.endpoint || 'https://api.senzor.dev/api/ingest/apm';
@@ -113,6 +124,10 @@ export class SenzorClient {
 
   private installNativeInstrumentations(endpoint: string, debug: boolean) {
     if (this.isInstrumented) return;
+
+    // Register the AI manager before provider instrumentations install, so their
+    // patched clients can emit AI generations through it.
+    registerAiManager(this.ai);
 
     this.setupGlobalErrorHandlers();
     this.setupLogInterception();
@@ -179,6 +194,13 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('azure-openai')) { instrumentAzureOpenAI(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('cohere')) { instrumentCohere(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('mistral')) { instrumentMistral(this.options || undefined); } } catch {}
+
+      // --- Phase 7 Instrumentations: AI abstraction layers + more providers ---
+      try { if (this.isInstrumentationEnabled('vercel-ai')) { instrumentVercelAi(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('langchain')) { instrumentLangchain(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('groq')) { instrumentGroq(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('ollama')) { instrumentOllama(this.options || undefined); } } catch {}
+
       try { if (this.isInstrumentationEnabled('firebase')) { instrumentFirebase(this.options || undefined); } } catch {}
 
       // --- Runtime Metrics ---

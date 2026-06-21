@@ -2,6 +2,8 @@ import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
 import { runWithCapturedSpan, startCapturedSpan } from './span';
+import { recordProviderGeneration } from './ai/emit';
+import { isAsyncIterable, wrapAiStream } from './ai/stream';
 
 // ---------------------------------------------------------------------------
 // OpenAI SDK Instrumentation
@@ -136,6 +138,8 @@ const patchOpenAIClient = (openaiModule: any, options?: SenzorOptions) => {
 
           if (!span) return original.call(this, path, opts);
 
+          const startedAt = Date.now();
+
           return runWithCapturedSpan(span, () => {
             try {
               const result = original.call(this, path, opts);
@@ -163,6 +167,76 @@ const patchOpenAIClient = (openaiModule: any, options?: SenzorOptions) => {
                     }
 
                     span.end(0, endMeta);
+
+                    // First-class AI generation (only for model-bearing calls;
+                    // skips files/models-list/etc.). Emitted once here, not in
+                    // the _request fallback, to avoid double counting.
+                    if (model) {
+                      const params = {
+                        temperature: opts?.body?.temperature,
+                        max_tokens: opts?.body?.max_tokens,
+                        top_p: opts?.body?.top_p,
+                      };
+                      const input = opts?.body?.messages ?? opts?.body?.input ?? opts?.body?.prompt;
+
+                      // Streaming: observe the user's own iteration (never consume
+                      // it ourselves). Usage requires stream_options.include_usage;
+                      // TTFT is always captured from the first chunk.
+                      if (opts?.body?.stream && isAsyncIterable(response)) {
+                        let ttft: number | undefined;
+                        let usage: any;
+                        let respModel: string | undefined;
+                        let finishReason: string | undefined;
+                        const aggregated: string[] = [];
+
+                        return wrapAiStream(response, {
+                          onChunk: (chunk: any) => {
+                            if (ttft === undefined) ttft = Date.now() - startedAt;
+                            if (chunk?.usage) usage = chunk.usage;
+                            if (chunk?.model) respModel = chunk.model;
+                            const fr = chunk?.choices?.[0]?.finish_reason;
+                            if (fr) finishReason = fr;
+                            const delta = chunk?.choices?.[0]?.delta?.content;
+                            if (typeof delta === 'string') aggregated.push(delta);
+                          },
+                          onDone: () => {
+                            recordProviderGeneration({
+                              provider: 'openai',
+                              operation: operationName,
+                              requestModel: model,
+                              responseModel: respModel,
+                              tokensIn: usage?.prompt_tokens,
+                              tokensOut: usage?.completion_tokens,
+                              latencyMs: Date.now() - startedAt,
+                              timeToFirstTokenMs: ttft,
+                              finishReason,
+                              streaming: true,
+                              params,
+                              input,
+                              output: aggregated.length ? aggregated.join('') : undefined,
+                              status: 'ok',
+                            });
+                          },
+                        });
+                      }
+
+                      recordProviderGeneration({
+                        provider: 'openai',
+                        operation: operationName,
+                        requestModel: model,
+                        responseModel: response?.model,
+                        tokensIn: response?.usage?.prompt_tokens,
+                        tokensOut: response?.usage?.completion_tokens,
+                        latencyMs: Date.now() - startedAt,
+                        finishReason: response?.choices?.[0]?.finish_reason,
+                        streaming: false,
+                        params,
+                        input,
+                        output: response?.choices ?? response?.data,
+                        status: 'ok',
+                      });
+                    }
+
                     return response;
                   },
                   (error: any) => {
@@ -173,6 +247,21 @@ const patchOpenAIClient = (openaiModule: any, options?: SenzorOptions) => {
                       'http.response.status_code': statusCode,
                       'gen_ai.error.code': error?.code,
                     });
+
+                    if (model) {
+                      recordProviderGeneration({
+                        provider: 'openai',
+                        operation: operationName,
+                        requestModel: model,
+                        latencyMs: Date.now() - startedAt,
+                        streaming: !!opts?.body?.stream,
+                        status: 'error',
+                        statusCode,
+                        errorType: error?.name || error?.type || 'OpenAIError',
+                        errorMessage: error?.message,
+                      });
+                    }
+
                     throw error;
                   }
                 );

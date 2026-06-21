@@ -1,3 +1,15 @@
+# 1.4.0
+
+feat(ai): first-class AI Monitoring (LLM observability) pillar. New `Senzor.ai` API — `trace()` (group a multi-step workflow), `generation()` (record one LLM/tool/retrieval/embedding call), `wrapGeneration()` (time + record any model call) — for monitoring ANY AI provider manually. Provider auto-instrumentations (OpenAI, Anthropic, Azure OpenAI, Gemini/Vertex, Cohere, Mistral) now additionally emit first-class AI generations (model, tokens, latency, finish reason; opt-in prompt/output capture) to a new `/api/ingest/ai` pillar, in addition to the existing APM spans. New `ai` options: `{ enabled, captureContent (default false), sampleRate }`. AI traces auto-link to the active APM trace. Cost is computed server-side. Browser/edge builds expose the manual API for in-browser models (e.g. WebLLM).
+
+feat(ai): expanded coverage — Vercel AI SDK (`ai`: generateText/streamText/generateObject/streamObject/embed/embedMany, provider auto-attributed from the model), LangChain.js (`@langchain/core` chat-model `invoke` with normalized `usage_metadata`), Groq (`groq-sdk`, OpenAI-compatible + streaming) and Ollama (`ollama`, local models, prompt_eval_count/eval_count incl. streaming). New instrumentation keys: `vercel-ai`, `langchain`, `groq`, `ollama`. Backend adds a top-consumers endpoint (cost/calls/tokens by user and by session) surfaced on the source dashboard.
+
+feat(ai): quality/eval scores — new `Senzor.ai.score({ name, value, ... })` attaches numeric/boolean/categorical scores (user feedback, automated evals) to the active trace or a specific generation. Score averages surface on the source dashboard and per-trace; the dashboard adds thumbs up/down feedback.
+
+feat(ai): streaming token accounting now also covers Cohere (`chatStream`) and Mistral (`chat.stream`/`fim.stream`) via the same non-consuming wrapper, completing streaming usage capture across all instrumented providers.
+
+feat(ai): streaming token accounting via a non-consuming Proxy wrapper — observes the caller's own iteration to capture usage, time-to-first-token, finish reason and aggregated output without ever reading the stream ourselves (OpenAI usage requires `stream_options.include_usage`; Anthropic + Gemini expose usage natively). Other stream methods (`toReadableStream`, `tee`, …) are forwarded untouched.
+
 # 1.3.9
 
 fix(transport): split each flush into size-bounded requests (new `maxBatchBytes` option, default ~0.9MB) so a single POST can never exceed the ingest body limit; classify failures (retryable network/5xx/429 vs non-retryable 4xx) and drop+count non-retryable or oversized-single-item payloads instead of restoring them — fixes the death spiral where large instrumented payloads (413) silently halted telemetry until restart

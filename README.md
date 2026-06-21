@@ -92,8 +92,12 @@ All instrumentations activate automatically when the corresponding library is im
 | 29 | `@azure/openai` | `azure-openai` | Chat, completions, embeddings, images, audio (v1.x API) |
 | 30 | `cohere-ai` | `cohere` | Chat, embed, rerank, classify, summarize, tokenize |
 | 31 | `@mistralai/mistralai` | `mistral` | Chat, FIM, embeddings, model, token usage |
+| 32 | `ai` (Vercel AI SDK) | `vercel-ai` | generateText/streamText/generateObject/streamObject/embed, all fronted providers, streaming usage |
+| 33 | `@langchain/core` | `langchain` | Chat model `invoke` across providers, normalized `usage_metadata` |
+| 34 | `groq-sdk` | `groq` | Chat completions, embeddings, audio, streaming token usage |
+| 35 | `ollama` | `ollama` | Local chat/generate/embeddings, prompt_eval_count / eval_count |
 
-All AI instrumentations follow [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reason`).
+All AI instrumentations follow [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reason`) **and** feed the first-class AI Monitoring pillar (cost, tokens, latency, traces). Beyond auto-instrumentation, monitor ANY model — including unsupported providers and in-browser models (WebLLM) — with the manual API: `Senzor.ai.trace()`, `Senzor.ai.generation()`, `Senzor.ai.wrapGeneration()`.
 
 ### Cloud & Infrastructure
 

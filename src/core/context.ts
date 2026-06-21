@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import { ActiveTrace, Span } from './types';
+import { ActiveTrace, AiTraceContext, Span } from './types';
 
 export const storage = new AsyncLocalStorage<ActiveTrace>();
+
+// Dedicated storage for AI-trace contexts (kept separate from APM/task traces
+// so AI generations never mix into the span machinery).
+export const aiStorage = new AsyncLocalStorage<AiTraceContext>();
 
 export const Context = {
   run: <T>(trace: ActiveTrace, fn: () => T): T => {

@@ -39,4 +39,8 @@ export const instrumentGoogleGenAI = () => {};
 export const instrumentAzureOpenAI = () => {};
 export const instrumentCohere = () => {};
 export const instrumentMistral = () => {};
+export const instrumentVercelAi = () => {};
+export const instrumentLangchain = () => {};
+export const instrumentGroq = () => {};
+export const instrumentOllama = () => {};
 export const instrumentFirebase = () => {};
