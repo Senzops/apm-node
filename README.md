@@ -99,6 +99,19 @@ All instrumentations activate automatically when the corresponding library is im
 
 All AI instrumentations follow [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reason`) **and** feed the first-class AI Monitoring pillar (cost, tokens, latency, traces). Beyond auto-instrumentation, monitor ANY model — including unsupported providers and in-browser models (WebLLM) — with the manual API: `Senzor.ai.trace()`, `Senzor.ai.generation()`, `Senzor.ai.wrapGeneration()`.
 
+AI Monitoring sources have their **own ingest key**, separate from APM/Task. Pass it under `ai.apiKey` so AI telemetry routes to its source while other pillars keep their key:
+
+```ts
+// AI-only
+Senzor.init({ ai: { apiKey: '<YOUR_AI_KEY>', captureContent: false } });
+
+// Alongside APM/Task (one init, per-pillar keys)
+Senzor.init({
+  apiKey: '<YOUR_APM_OR_TASK_KEY>',
+  ai: { apiKey: '<YOUR_AI_KEY>' },
+});
+```
+
 ### Cloud & Infrastructure
 
 | # | Library | Instrumentation Key | What's Captured |

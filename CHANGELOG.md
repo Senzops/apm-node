@@ -1,3 +1,7 @@
+# 1.4.1
+
+feat(ai): per-pillar AI ingest key — new `ai.apiKey` option. AI Monitoring sources carry their own key (separate from APM/Task), so apps that use multiple pillars from one SDK init can now route AI telemetry to its own source: `Senzor.init({ apiKey: '<apm/task key>', ai: { apiKey: '<ai source key>' } })`. AI requests are sent with `ai.apiKey` (falling back to the top-level `apiKey`); other pillars are unaffected. `init()` now also accepts an AI-only configuration (top-level `apiKey` optional when `ai.apiKey` is set).
+
 # 1.4.0
 
 feat(ai): first-class AI Monitoring (LLM observability) pillar. New `Senzor.ai` API — `trace()` (group a multi-step workflow), `generation()` (record one LLM/tool/retrieval/embedding call), `wrapGeneration()` (time + record any model call) — for monitoring ANY AI provider manually. Provider auto-instrumentations (OpenAI, Anthropic, Azure OpenAI, Gemini/Vertex, Cohere, Mistral) now additionally emit first-class AI generations (model, tokens, latency, finish reason; opt-in prompt/output capture) to a new `/api/ingest/ai` pillar, in addition to the existing APM spans. New `ai` options: `{ enabled, captureContent (default false), sampleRate }`. AI traces auto-link to the active APM trace. Cost is computed server-side. Browser/edge builds expose the manual API for in-browser models (e.g. WebLLM).

@@ -38,6 +38,13 @@ export interface AiOptions {
   /** Master switch for AI auto-instrumentation + manual API. Default: true. */
   enabled?: boolean;
   /**
+   * Dedicated ingest key for the AI Monitoring pillar. AI Monitoring sources
+   * have their own key (separate from APM/Task), so set this when your AI source
+   * key differs from the SDK's top-level `apiKey`. AI telemetry is sent with
+   * this key; falls back to the top-level `apiKey` when omitted.
+   */
+  apiKey?: string;
+  /**
    * Whether the SDK sends captured prompt/completion content. Defense-in-depth:
    * the backend ALSO gates on the source's capture policy. Default: false.
    */

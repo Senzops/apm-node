@@ -103,7 +103,9 @@ export class SenzorClient {
   }
 
   public init(options: SenzorOptions) {
-    if (!options.apiKey) {
+    // The SDK is usable with a top-level key (APM/Task/...) and/or a dedicated
+    // AI key (ai.apiKey) — so AI-only setups initialize correctly too.
+    if (!options.apiKey && !options.ai?.apiKey) {
       console.warn('[Senzor] API Key missing. SDK disabled.');
       return;
     }

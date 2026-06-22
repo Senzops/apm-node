@@ -61,6 +61,8 @@ interface FlushRequest {
   endpoint: string;
   body: Record<string, unknown>;
   count: number;
+  /** Per-pillar ingest key; falls back to the top-level apiKey when omitted. */
+  apiKey?: string;
   restore: () => void;
 }
 
@@ -381,12 +383,14 @@ export class Transport {
     const requests: FlushRequest[] = [];
     const max = this.maxBatchBytes;
 
+    const aiKey = this.config.ai?.apiKey;
     const push = (items: any[], key: string, queue: any[]) => {
       for (const chunk of this.chunkBySize(items, max)) {
         requests.push({
           endpoint: this.aiEndpoint,
           body: { aiTraces: [], aiGenerations: [], aiScores: [], errors: [], logs: [], [key]: chunk },
           count: chunk.length,
+          apiKey: aiKey,
           restore: () => this.prependWithLimit(queue, chunk)
         });
       }
@@ -414,7 +418,7 @@ export class Transport {
     return true;
   }
 
-  private async postJson(endpoint: string, payload: unknown) {
+  private async postJson(endpoint: string, payload: unknown, apiKey?: string) {
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),
@@ -428,7 +432,7 @@ export class Transport {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-service-api-key': this.config.apiKey,
+          'x-service-api-key': apiKey || this.config.apiKey,
           [SENZOR_INTERNAL_HEADER]: 'true'
         },
         body: JSON.stringify(payload),
@@ -487,7 +491,7 @@ export class Transport {
           }
 
           try {
-            await this.postJson(request.endpoint, request.body);
+            await this.postJson(request.endpoint, request.body, request.apiKey);
             sent++;
           } catch (error) {
             if (this.isRetryableError(error)) {
