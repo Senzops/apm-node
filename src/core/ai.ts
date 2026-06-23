@@ -150,6 +150,16 @@ const nowMs = (): number =>
 const isThenable = (v: any): v is Promise<any> =>
   v != null && typeof v.then === 'function';
 
+/**
+ * Only a model call (LLM generation / embedding) failing should mark the whole
+ * trace as failed. Structural observations (tool / mcp / agent / handoff / ...)
+ * erroring is normal agent behaviour the workflow may recover from, so they
+ * never taint the trace status — a truly fatal structural failure surfaces by
+ * THROWING, which propagates to the enclosing trace function.
+ */
+const isModelObservation = (type?: AiObservationType): boolean =>
+  !type || type === 'generation' || type === 'embedding';
+
 export class AiManager {
   constructor(
     private getTransport: () => Transport | null,
@@ -232,7 +242,8 @@ export class AiManager {
     if (ctx) {
       const root = ctx.root ?? ctx;
       startTime = Math.max(0, (nowMs() - latency) - root.startPerf);
-      if (input.status === 'error') root.hasError = true;
+      // Only a model-call error fails the trace; tool/structural errors don't.
+      if (input.status === 'error' && isModelObservation(input.type)) root.hasError = true;
     }
     if (!traceId) traceId = generateTraceId();
 
@@ -273,7 +284,7 @@ export class AiManager {
     let startTime = 0;
     if (root) {
       startTime = Math.max(0, (nowMs() - latency) - root.startPerf);
-      if (input.status === 'error') root.hasError = true;
+      if (input.status === 'error' && isModelObservation(input.type)) root.hasError = true;
     }
 
     transport.addAiGeneration(this.buildGeneration(
@@ -502,7 +513,10 @@ export class AiManager {
     };
 
     const emit = (status: AiStatus, result?: T, error?: any) => {
-      if (status === 'error') root.hasError = true;
+      // A structural span (agent/tool/mcp/...) recording an error does NOT taint
+      // the trace: a handled tool/MCP failure is normal. A FATAL structural
+      // failure rethrows below, propagating to the enclosing trace function,
+      // which is what marks the trace as failed.
       transport.addAiGeneration(this.buildGeneration({
         generationId: spanId,
         parentGenerationId,
