@@ -17,3 +17,30 @@ export const recordProviderGeneration = (input: RecordGenerationInput): void => 
     /* never break the host call */
   }
 };
+
+/** A tool call observed alongside a generation (e.g. an AI SDK agent step). */
+export interface ProviderToolCall {
+  name: string;
+  args?: any;
+  result?: any;
+  status?: 'ok' | 'error';
+  errorMessage?: string;
+  latencyMs?: number;
+}
+
+/**
+ * Record a generation together with the tool calls it produced as one grouped
+ * trace (generation → tool children). Used by framework instrumentation whose
+ * result exposes the full step/tool structure (e.g. Vercel AI SDK `steps`).
+ */
+export const recordProviderGenerationWithTools = (
+  input: RecordGenerationInput,
+  tools?: ProviderToolCall[]
+): void => {
+  try {
+    const manager = getAiManager();
+    if (manager) manager.recordGenerationWithChildren(input, tools);
+  } catch {
+    /* never break the host call */
+  }
+};

@@ -2,6 +2,7 @@ import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
 import { recordProviderGeneration } from './ai/emit';
+import { getAiManager } from '../core/ai';
 
 // ---------------------------------------------------------------------------
 // LangChain.js Instrumentation (`@langchain/core`)
@@ -99,10 +100,47 @@ const patchInvoke = (proto: any) => {
   );
 };
 
+// ---------------------------------------------------------------------------
+// Tool execution. Patch the tool base class's OWN `invoke` so each tool call
+// becomes a `tool` observation. Routed through `manager.tool()` so it nests
+// under the active AI trace (if the user wrapped the run in `Senzor.ai.trace`/
+// `agent`), or stands alone otherwise. We only patch a prototype that owns
+// `invoke` to avoid patching the generic Runnable.invoke (which would wrap
+// every chain/model and double-count).
+// ---------------------------------------------------------------------------
+const patchToolInvoke = (proto: any) => {
+  if (!proto || !Object.prototype.hasOwnProperty.call(proto, 'invoke') || typeof proto.invoke !== 'function') return;
+
+  patchMethod(
+    proto,
+    'invoke',
+    'senzor.langchain.tool.invoke',
+    (original) =>
+      function patchedToolInvoke(this: any, input: any, ...rest: any[]) {
+        const manager = getAiManager();
+        if (!manager) return original.call(this, input, ...rest);
+        const name = this?.name ?? 'tool';
+        try {
+          return manager.tool({ name, args: input }, () => original.call(this, input, ...rest));
+        } catch {
+          return original.call(this, input, ...rest);
+        }
+      }
+  );
+};
+
 export const instrumentLangchain = (_options?: SenzorOptions) => {
   hookRequire('@langchain/core/language_models/chat_models', (exports: any) => {
     if (exports?.BaseChatModel?.prototype) {
       patchInvoke(exports.BaseChatModel.prototype);
+    }
+  });
+  hookRequire('@langchain/core/tools', (exports: any) => {
+    if (!exports) return;
+    // Patch whichever tool base classes define their own invoke. Subclasses
+    // that inherit invoke are covered transitively.
+    for (const cls of ['StructuredTool', 'Tool', 'DynamicTool', 'DynamicStructuredTool']) {
+      patchToolInvoke(exports?.[cls]?.prototype);
     }
   });
 };

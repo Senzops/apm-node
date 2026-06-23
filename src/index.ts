@@ -26,6 +26,11 @@ const Senzor = {
     generation: client.ai.generation.bind(client.ai),
     wrapGeneration: client.ai.wrapGeneration.bind(client.ai),
     score: client.ai.score.bind(client.ai),
+    // Agent observability — group nested agent / tool / MCP work into the tree.
+    agent: client.ai.agent.bind(client.ai),
+    tool: client.ai.tool.bind(client.ai),
+    mcp: client.ai.mcp.bind(client.ai),
+    handoff: client.ai.handoff.bind(client.ai),
   },
 
   // Express

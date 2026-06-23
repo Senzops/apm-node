@@ -1,3 +1,15 @@
+# 1.5.0
+
+feat(ai): agent observability — model the full agent, not just the LLM call. New manual scopes group nested work into a real trace tree: `Senzor.ai.agent(name|opts, fn)` (an agent node in a single- or multi-agent workflow), `Senzor.ai.tool(name|opts, fn)` (a tool/function call — name always recorded; args + result captured only under content capture), `Senzor.ai.mcp({ server, method, toolName, resourceUri }, fn)` (a Model Context Protocol server call), and `Senzor.ai.handoff({ from, to, reason })` (a control transfer between agents). Anything recorded inside a scope auto-nests beneath it (parent/child + depth), and nesting is concurrency-safe (parallel tool calls stay correctly parented). Bare `ai.generation()` now auto-parents under the enclosing scope.
+
+feat(ai): automatic tool tracing — the Vercel AI SDK agent loop is now captured as a tree: `generateText`/`generateObject` emit a child `tool` observation per executed tool (from `steps[].toolResults`), grouped with the generation in one trace. LangChain tool execution is captured too (best-effort patch of the tool base class's own `invoke`, nesting under the active AI trace).
+
+feat(ai): MCP client auto-instrumentation — `@modelcontextprotocol/sdk` `Client.callTool`/`readResource` are recorded as `mcp` observations (server, method, tool, resource) — answering "which MCP server/tool returned bad data?". An MCP `CallToolResult` with `isError: true` is mapped to an error span without throwing. New instrumentation key: `mcp` (on by default; manual `ai.mcp()` is the guaranteed path for pure-ESM clients).
+
+feat(ai): reasoning tokens — `reasoningTokens` now captured where providers expose it (OpenAI `completion_tokens_details.reasoning_tokens`, streaming + non-streaming; Vercel AI SDK `usage.reasoningTokens`).
+
+New observation types: `agent`, `mcp`, `chain`, `handoff`, `reasoning`, `guardrail` (additive — existing `generation`/`tool`/`retrieval`/`embedding`/`span` unchanged). Only `generation`/`embedding` feed cost/call metrics; structural spans populate the trace tree without polluting model/provider breakdowns. All new fields are optional and backward-compatible: older data and prior SDK clients are unaffected.
+
 # 1.4.1
 
 feat(ai): per-pillar AI ingest key — new `ai.apiKey` option. AI Monitoring sources carry their own key (separate from APM/Task), so apps that use multiple pillars from one SDK init can now route AI telemetry to its own source: `Senzor.init({ apiKey: '<apm/task key>', ai: { apiKey: '<ai source key>' } })`. AI requests are sent with `ai.apiKey` (falling back to the top-level `apiKey`); other pillars are unaffected. `init()` now also accepts an AI-only configuration (top-level `apiKey` optional when `ai.apiKey` is set).

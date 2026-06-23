@@ -43,4 +43,5 @@ export const instrumentVercelAi = () => {};
 export const instrumentLangchain = () => {};
 export const instrumentGroq = () => {};
 export const instrumentOllama = () => {};
+export const instrumentMcp = () => {};
 export const instrumentFirebase = () => {};

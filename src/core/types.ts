@@ -57,7 +57,18 @@ export interface AiOptions {
 // AI Monitoring (LLM Observability) payloads + context
 // ---------------------------------------------------------------------------
 
-export type AiObservationType = 'generation' | 'tool' | 'retrieval' | 'embedding' | 'span';
+export type AiObservationType =
+  | 'generation'
+  | 'embedding'
+  | 'agent'
+  | 'tool'
+  | 'mcp'
+  | 'retrieval'
+  | 'chain'
+  | 'handoff'
+  | 'reasoning'
+  | 'guardrail'
+  | 'span';
 export type AiStatus = 'ok' | 'error';
 
 /** A single AI observation (LLM/tool/retrieval/embedding call) sent to ingest. */
@@ -86,6 +97,14 @@ export interface AiGenerationPayload {
   input?: any;                 // omitted unless captureContent is on
   output?: any;
   toolCalls?: any[];
+  // Structural span enrichment (agent-observability). Identity fields are kept
+  // server-side regardless of content capture; tool args/result are masked.
+  agent?: { name: string; role?: string; step?: number };
+  tool?: { name: string; args?: any; result?: any };
+  mcp?: { server: string; transport?: string; method?: string; toolName?: string; resourceUri?: string };
+  handoff?: { from?: string; to: string; reason?: string };
+  reasoningTokens?: number;
+  depth?: number;
   metadata?: Record<string, any>;
   timestamp: string;
 }
@@ -117,7 +136,16 @@ export interface AiTracePayload {
   timestamp: string;
 }
 
-/** Active AI-trace context propagated via async storage. */
+/**
+ * Active AI-trace context propagated via async storage.
+ *
+ * The same shape is reused for nested span scopes (agent/tool/mcp/chain): a
+ * child scope is a shallow copy with a fresh `currentSpanId`/`depth`, but it
+ * keeps a reference to the trace-level `root` so error state set deep in the
+ * tree propagates back up to the trace that emits the final status. Nesting is
+ * done with nested `aiStorage.run(child, ...)`, which stays correct under
+ * concurrent (e.g. parallel tool) execution.
+ */
 export interface AiTraceContext {
   traceId: string;
   apmTraceId?: string;
@@ -129,6 +157,12 @@ export interface AiTraceContext {
   startPerf: number;   // performance.now() at start (relative offsets)
   metadata?: Record<string, any>;
   hasError: boolean;
+  /** Id of the enclosing span (agent/tool/mcp/chain); children auto-parent to it. */
+  currentSpanId?: string;
+  /** Nesting depth (0 at the trace root). */
+  depth?: number;
+  /** The trace-level context (self at the root) — shared sink for error state. */
+  root?: AiTraceContext;
 }
 
 export interface Span {

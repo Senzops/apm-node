@@ -1,7 +1,7 @@
 import { SenzorOptions } from '../core/types';
 import { hookRequire } from './hook';
 import { patchMethod } from './patch';
-import { recordProviderGeneration } from './ai/emit';
+import { recordProviderGeneration, recordProviderGenerationWithTools, ProviderToolCall } from './ai/emit';
 
 // ---------------------------------------------------------------------------
 // Vercel AI SDK Instrumentation (`ai` package)
@@ -33,6 +33,33 @@ const commonParams = (params: any) => ({
 
 const inputOf = (params: any) => params?.messages ?? params?.prompt ?? params?.value ?? params?.values;
 
+/**
+ * Flatten the tool calls executed during a (possibly multi-step) generateText /
+ * generateObject call into child observations. The AI SDK exposes them on
+ * `value.steps[].toolResults` (multi-step agent loop) and/or the top-level
+ * `value.toolResults`; each result carries { toolName, args, result }.
+ */
+const collectTools = (value: any): ProviderToolCall[] => {
+  const tools: ProviderToolCall[] = [];
+  try {
+    const steps = Array.isArray(value?.steps) && value.steps.length ? value.steps : [value];
+    for (const step of steps) {
+      const results = Array.isArray(step?.toolResults) ? step.toolResults : [];
+      for (const r of results) {
+        tools.push({ name: r?.toolName || 'tool', args: r?.args, result: r?.result, status: 'ok' });
+      }
+      // Tool calls that produced no result (e.g. the model requested a tool but
+      // execution failed/was skipped) — still surface which tool was invoked.
+      const calls = Array.isArray(step?.toolCalls) ? step.toolCalls : [];
+      for (const c of calls) {
+        const hasResult = results.some((r: any) => r?.toolCallId && r.toolCallId === c?.toolCallId);
+        if (!hasResult) tools.push({ name: c?.toolName || 'tool', args: c?.args, status: 'error', errorMessage: 'No tool result' });
+      }
+    }
+  } catch { /* never break the host call */ }
+  return tools;
+};
+
 /** Wrap a Promise-returning op (generateText, generateObject, embed, embedMany). */
 const wrapAwaitable = (original: Function, operation: string, type: 'generation' | 'embedding') =>
   function patchedVercelOp(this: any, params: any) {
@@ -47,7 +74,7 @@ const wrapAwaitable = (original: Function, operation: string, type: 'generation'
     return result.then(
       (value: any) => {
         const usage = value?.usage;
-        recordProviderGeneration({
+        const genInput = {
           provider,
           operation,
           type,
@@ -56,13 +83,19 @@ const wrapAwaitable = (original: Function, operation: string, type: 'generation'
           // text usage: promptTokens/completionTokens; embeddings: tokens.
           tokensIn: usage?.promptTokens ?? usage?.tokens,
           tokensOut: usage?.completionTokens,
+          reasoningTokens: usage?.reasoningTokens,
           latencyMs: Date.now() - startedAt,
           finishReason: value?.finishReason,
           params: commonParams(params),
           input: inputOf(params),
           output: value?.text ?? value?.object,
-          status: 'ok',
-        });
+          status: 'ok' as const,
+        };
+        // For text generation, also surface any tool calls as child observations
+        // so the agent loop (model → tools) is visible as one grouped trace.
+        const tools = type === 'generation' ? collectTools(value) : [];
+        if (tools.length) recordProviderGenerationWithTools(genInput, tools);
+        else recordProviderGeneration(genInput);
         return value;
       },
       (error: any) => {

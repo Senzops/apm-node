@@ -96,8 +96,25 @@ All instrumentations activate automatically when the corresponding library is im
 | 33 | `@langchain/core` | `langchain` | Chat model `invoke` across providers, normalized `usage_metadata` |
 | 34 | `groq-sdk` | `groq` | Chat completions, embeddings, audio, streaming token usage |
 | 35 | `ollama` | `ollama` | Local chat/generate/embeddings, prompt_eval_count / eval_count |
+| 36 | `@modelcontextprotocol/sdk` | `mcp` | MCP client `callTool` / `readResource` — server, method, tool, resource, `isError` |
 
 All AI instrumentations follow [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reason`) **and** feed the first-class AI Monitoring pillar (cost, tokens, latency, traces). Beyond auto-instrumentation, monitor ANY model — including unsupported providers and in-browser models (WebLLM) — with the manual API: `Senzor.ai.trace()`, `Senzor.ai.generation()`, `Senzor.ai.wrapGeneration()`.
+
+#### Agent observability (agents, tools, MCP, multi-agent)
+
+Beyond single LLM calls, model the whole agent as a trace tree. Tool execution (Vercel AI SDK, LangChain) and MCP client calls are captured automatically; for custom agents, group work with the manual scopes — anything recorded inside auto-nests beneath the enclosing scope (parent/child + depth), and parallel tool calls stay correctly parented:
+
+```ts
+await Senzor.ai.agent({ name: 'researcher' }, async () => {
+  // LLM calls + provider auto-instrumentation here nest under the agent
+  const docs = await Senzor.ai.tool({ name: 'search_docs', args: { q } }, () => searchDocs(q));
+  const data = await Senzor.ai.mcp({ server: 'github', method: 'tools/call', toolName: 'list_issues' },
+    () => mcpClient.callTool({ name: 'list_issues', arguments: { repo } }));
+  Senzor.ai.handoff({ from: 'researcher', to: 'writer', reason: 'analysis complete' });
+});
+```
+
+`agent` / `tool` / `mcp` / `handoff` (plus `chain`, `reasoning`, `guardrail`) are structural observations: they build the trace tree but never pollute cost/call metrics (only `generation`/`embedding` do). Tool args/results and MCP payloads are captured **only** under content capture and masked server-side; identity (tool name, MCP server, agent name) is always recorded so failures stay attributable. Senzor is observability-only — these APIs record what your agent does; they never execute or re-run anything.
 
 AI Monitoring sources have their **own ingest key**, separate from APM/Task. Pass it under `ai.apiKey` so AI telemetry routes to its source while other pillars keep their key:
 

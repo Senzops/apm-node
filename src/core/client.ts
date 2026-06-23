@@ -56,6 +56,7 @@ import { instrumentVercelAi } from '../instrumentation/vercel-ai';
 import { instrumentLangchain } from '../instrumentation/langchain';
 import { instrumentGroq } from '../instrumentation/groq';
 import { instrumentOllama } from '../instrumentation/ollama';
+import { instrumentMcp } from '../instrumentation/mcp';
 import { instrumentFirebase } from '../instrumentation/firebase';
 
 const MAX_STRINGIFY_LENGTH = 8192;
@@ -202,6 +203,7 @@ export class SenzorClient {
       try { if (this.isInstrumentationEnabled('langchain')) { instrumentLangchain(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('groq')) { instrumentGroq(this.options || undefined); } } catch {}
       try { if (this.isInstrumentationEnabled('ollama')) { instrumentOllama(this.options || undefined); } } catch {}
+      try { if (this.isInstrumentationEnabled('mcp')) { instrumentMcp(this.options || undefined); } } catch {}
 
       try { if (this.isInstrumentationEnabled('firebase')) { instrumentFirebase(this.options || undefined); } } catch {}
 
