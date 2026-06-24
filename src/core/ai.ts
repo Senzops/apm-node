@@ -89,6 +89,8 @@ export interface ToolOptions {
   args?: any;
   /** Capture the function's return value as the tool result. Default true. */
   captureResult?: boolean;
+  /** Treat a resolved result as a failure (e.g. a controller result with status >= 400). */
+  resultIsError?: (result: any) => boolean;
   metadata?: Record<string, any>;
 }
 
@@ -414,6 +416,7 @@ export class AiManager {
       name: opts.name || 'tool',
       tool: { name: opts.name || 'tool', args: opts.args },
       captureResult: opts.captureResult !== false,
+      resultIsError: opts.resultIsError,
       metadata: opts.metadata,
     }, fn);
   }
